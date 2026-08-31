@@ -2,16 +2,15 @@
 title: Background
 ---
 
-This page is intended to provide the reader with any theoretical
-knowledge or other concepts that form the basis of your package.
-This page can include equations, figures, flowcharts, etc. for a better understanding of the theory behind
-the package along with any code snippets necessary to explain the software design.
+The design separates form parameters from representation coefficients. Form
+parameters are quantities a naval architect reasons about, such as section
+area, waterline breadth, tangent angles, and centroids. B-spline coefficients
+are internal states determined by a fairness solve.
 
-## Referencing using bib files
-
-You can add references in the `references.bib` file and cite them 
-in the page like this {cite:p}`perez2011python`. 
-You can also include a list of references cited at the end as shown below.
+This separation follows the early fairness-based hull parameterization work of
+Harries. It also fits the LSDO computational model: form parameters are CSDL
+inputs, spline coefficients are implicit states, and evaluated geometry is a
+differentiable output for downstream analysis.
 
 ## Bibliography
 

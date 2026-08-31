@@ -6,6 +6,7 @@ from .core.parameterization.ffd_block import FFDBlock
 from .core.parameterization.volume_sectional_parameterization import VolumeSectionalParameterization, VolumeSectionalParameterizationInputs
 from .core.parameterization.sectional_parameterization import SectionalParameterization, SectionalParameters
 from .core.parameterization.parameterization_solver import ParameterizationSolver, GeometricVariables
+from .core.splines import FSplineCurve, FSplineProblem
 
 from pathlib import Path
 
