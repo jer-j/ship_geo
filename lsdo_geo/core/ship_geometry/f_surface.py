@@ -64,6 +64,15 @@ class SurfaceDerivativeConstraint:
 
 
 @dataclass(frozen=True)
+class SurfaceSamplesConstraint:
+    """A vectorized set of complete surface-position constraints."""
+
+    coordinates: np.ndarray
+    target: Any
+    scale: float
+
+
+@dataclass(frozen=True)
 class SurfaceControlPointConstraint:
     """A direct constraint on one physical control point."""
 
@@ -73,7 +82,10 @@ class SurfaceControlPointConstraint:
 
 
 SurfaceConstraint = (
-    SurfacePointConstraint | SurfaceDerivativeConstraint | SurfaceControlPointConstraint
+    SurfacePointConstraint
+    | SurfaceDerivativeConstraint
+    | SurfaceSamplesConstraint
+    | SurfaceControlPointConstraint
 )
 
 
@@ -258,6 +270,31 @@ class FSurfaceProblem:
             )
         )
 
+    def add_points_constraint(
+        self,
+        coordinates: npt.ArrayLike,
+        targets: Any,
+        scale: float = 1.0,
+    ) -> None:
+        """Constrain many physical positions through one vectorized residual."""
+        coordinate_array = np.asarray(coordinates, dtype=float).reshape((-1, 2))
+        if coordinate_array.shape[0] < 1:
+            raise ValueError("at least one surface sample is required.")
+        if np.any(coordinate_array < 0.0) or np.any(coordinate_array > 1.0):
+            raise ValueError("surface coordinates must lie in [0, 1]^2.")
+        expected_shape = (coordinate_array.shape[0], 3)
+        if _value_array(targets).shape != expected_shape:
+            raise ValueError(
+                f"surface sample targets must have shape {expected_shape}."
+            )
+        self.constraints.append(
+            SurfaceSamplesConstraint(
+                coordinate_array.copy(),
+                _coerce_target(targets),
+                self._validate_scale(scale),
+            )
+        )
+
     def add_control_point_constraint(
         self,
         indices: tuple[int, int],
@@ -348,7 +385,9 @@ class FSurfaceProblem:
             self._constraint_residual(surface, constraint)
             for constraint in self.constraints
         )
-        constraint_residual = csdl.concatenate(residuals)
+        constraint_residual = (
+            residuals[0] if len(residuals) == 1 else csdl.concatenate(residuals)
+        )
         coefficient_count = int(np.prod(self.num_control_points) * 3)
         if constraint_residual.size > coefficient_count:
             raise ValueError(
@@ -387,6 +426,8 @@ class FSurfaceProblem:
             value = surface.evaluate(
                 [constraint.coordinates], constraint.derivative_orders
             ).reshape((3,))
+        elif isinstance(constraint, SurfaceSamplesConstraint):
+            value = surface.evaluate(constraint.coordinates)
         elif isinstance(constraint, SurfaceControlPointConstraint):
             value = surface.coefficients[
                 constraint.indices[0], constraint.indices[1], :
@@ -433,6 +474,20 @@ class FSurfaceProblem:
                     np.isclose(v, 0.0) or np.isclose(v, 1.0)
                 ):
                     corners[index] = _value_array(constraint.target).reshape(3)
+            elif isinstance(constraint, SurfaceSamplesConstraint):
+                targets = _value_array(constraint.target).reshape((-1, 3))
+                for coordinates, target in zip(constraint.coordinates, targets):
+                    u, v = coordinates
+                    if not (
+                        (np.isclose(u, 0.0) or np.isclose(u, 1.0))
+                        and (np.isclose(v, 0.0) or np.isclose(v, 1.0))
+                    ):
+                        continue
+                    index = (
+                        0 if np.isclose(u, 0.0) else self.num_control_points[0] - 1,
+                        0 if np.isclose(v, 0.0) else self.num_control_points[1] - 1,
+                    )
+                    corners[index] = target
 
         u_values = np.linspace(0.0, 1.0, self.num_control_points[0])
         v_values = np.linspace(0.0, 1.0, self.num_control_points[1])

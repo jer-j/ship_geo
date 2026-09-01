@@ -23,7 +23,7 @@ from .form_curves import (
     FormCurveKind,
     FormCurveProblem,
 )
-from .hull import HullGeometry, SectionLoftProblem
+from .hull import HullGeometry, SectionLoftAssembly, SectionLoftProblem
 from .hydrostatics import (
     Hydrostatics,
     compute_closed_surface_hydrostatics,
@@ -71,6 +71,7 @@ __all__ = [
     "PatchConnection",
     "PatchGraph",
     "SectionAssembly",
+    "SectionLoftAssembly",
     "SectionLoftProblem",
     "SectionProblem",
     "SectionTemplate",

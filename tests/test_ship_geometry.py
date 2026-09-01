@@ -150,6 +150,48 @@ def test_section_family_uses_one_global_kkt_and_compatible_loft():
     recorder.stop()
 
 
+def test_section_family_and_free_surface_share_one_global_kkt():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+
+    problem = SectionLoftProblem(
+        length=10.0,
+        station_parameters=[0.3, 0.7],
+        drafts=[2.0, 2.0],
+        half_breadths=[1.5, 1.5],
+        half_areas=[2.0, 2.0],
+        keel_tangent_angles=[0.5, 0.5],
+        waterline_tangent_angles=[0.0, 0.0],
+        num_section_control_points=7,
+        surface_formulation="variational",
+        name="variational_section_loft",
+    )
+    hull = problem.solve(max_iter=30)
+
+    assert len(hull.variational_result.stationarity_residuals) == 3
+    assert hull.surface.coefficients.shape == (7, 4, 3)
+    assert np.max(np.abs(hull.variational_result.constraint_residual.value)) < 1e-10
+    assert np.max(np.abs(hull.variational_result.stationarity_residual.value)) < 1e-9
+    transverse_parameters = np.linspace(0.0, 1.0, 11)
+    for section, station in zip(hull.sections, [0.3, 0.7]):
+        surface_section = hull.surface.evaluate(
+            np.column_stack(
+                (
+                    transverse_parameters,
+                    np.full(transverse_parameters.size, station),
+                )
+            )
+        ).value
+        section_points = section.evaluate(transverse_parameters).value
+        np.testing.assert_allclose(
+            surface_section[:, 1], section_points[:, 1], atol=2e-12
+        )
+        np.testing.assert_allclose(
+            surface_section[:, 2], section_points[:, 0], atol=2e-12
+        )
+    recorder.stop()
+
+
 def test_hard_chine_uses_repeated_knot_and_preserves_chine_point():
     recorder = csdl.Recorder(inline=True)
     recorder.start()

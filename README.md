@@ -26,6 +26,9 @@ design optimization.
 - One-solve section-family assembly and tensor-product surface lofting.
 - Free F-Surface control nets with thin-plate fairness, geometric constraints,
   and multi-patch continuity in the same global Newton solve.
+- Optional section-to-F-Surface incidence constraints that couple the complete
+  first-principles hull, including every section and the surface control net,
+  in that one solve.
 - Pointed boundaries, exact waterplane/transom caps, and a surface
   patch-connectivity graph.
 - General oriented multi-patch hydrostatics, including displacement, centers,

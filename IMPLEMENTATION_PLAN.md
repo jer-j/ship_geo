@@ -66,7 +66,9 @@ Status: compatible loft, free surface-control-net variational states, global
 surface fairness, pointed end closures, waterplane and transom caps, and patch
 graph implemented. Every free surface is assembled into the shared
 `VariationalSystem`, so several curves, sections, and surface patches can use
-one Newton solve.
+one Newton solve. `SectionLoftProblem` supports both the fixed compatible-loft
+map and a variational free-surface mode coupled exactly to all generating
+sections.
 
 - Skin compatible section-control polygons into tensor-product B-spline
   surfaces.

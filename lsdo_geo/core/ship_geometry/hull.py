@@ -1,18 +1,20 @@
-"""One-solve assembly of transverse sections and a compatible hull surface."""
+"""One-solve assembly of transverse sections and hull surfaces."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import csdl_alpha as csdl
+import lsdo_function_spaces as lfs
 import numpy as np
 import numpy.typing as npt
 
 from lsdo_geo.core.splines.f_spline import FSplineCurve
 from lsdo_geo.core.splines.variational import VariationalResult, VariationalSystem
 
+from .f_surface import FSurfaceAssembly, FSurfaceProblem
 from .hydrostatics import Hydrostatics, compute_hydrostatics
 from .sections import (
     SectionAssembly,
@@ -36,6 +38,13 @@ def _sequence_length(values: Any) -> int:
     return len(values)
 
 
+def _current_scalar(value: Any) -> float:
+    """Return a scalar's current value without changing its derivative path."""
+    if isinstance(value, csdl.Variable):
+        return float(np.asarray(value.value).reshape(-1)[0])
+    return float(value)
+
+
 @dataclass
 class HullGeometry:
     """Solved differentiable hull geometry and its principal diagnostics."""
@@ -48,13 +57,56 @@ class HullGeometry:
     variational_result: VariationalResult
 
 
+@dataclass
+class SectionLoftAssembly:
+    """Section and surface states registered in one variational system."""
+
+    surface: TensorProductSurface
+    section_assemblies: tuple[SectionAssembly, ...]
+    section_parameters: np.ndarray
+    surface_assembly: FSurfaceAssembly | None = None
+
+    def finalize(
+        self,
+        result: VariationalResult,
+        hydrostatic_section_parameters: npt.ArrayLike | None = None,
+    ) -> HullGeometry:
+        """Attach KKT diagnostics and construct differentiable analyses."""
+        solved_sections = tuple(
+            assembly.finalize(result) for assembly in self.section_assemblies
+        )
+        surface = (
+            self.surface
+            if self.surface_assembly is None
+            else self.surface_assembly.finalize(result)
+        )
+        analysis_parameters = (
+            np.linspace(0.0, 1.0, 21)
+            if hydrostatic_section_parameters is None
+            else np.asarray(hydrostatic_section_parameters, dtype=float)
+        )
+        return HullGeometry(
+            surface=surface,
+            sections=solved_sections,
+            section_parameters=self.section_parameters.copy(),
+            hydrostatics=compute_hydrostatics(surface, analysis_parameters),
+            validity=evaluate_surface_validity(surface),
+            variational_result=result,
+        )
+
+
 class SectionLoftProblem:
     """Assemble all F-Spline sections and surface fairness into one Newton solve.
 
     The section parameters identify interior longitudinal stations.  When
     ``pointed_ends`` is true, explicit collapsed bow and stern sections are
-    derived from the nearest interior section and included in the compatible
-    loft without introducing additional implicit states.
+    derived from the nearest interior section and included in the surface
+    construction without introducing additional implicit states.
+
+    ``surface_formulation="compatible_loft"`` retains the fixed linear loft.
+    ``surface_formulation="variational"`` adds a free surface control net and
+    exact section-incidence constraints to the same global KKT system.  It does
+    not introduce a second Newton solve.
     """
 
     def __init__(
@@ -71,6 +123,12 @@ class SectionLoftProblem:
         longitudinal_degree: int = 3,
         section_fairness_weights: dict[int, float] | None = None,
         longitudinal_fairness_weight: float = 0.0,
+        surface_formulation: Literal["compatible_loft", "variational"] = (
+            "compatible_loft"
+        ),
+        surface_num_longitudinal_control_points: int | None = None,
+        surface_fairness_weights: dict[tuple[int, int], float] | None = None,
+        surface_constraint_scale: float = 1.0,
         pointed_ends: bool = True,
         x_origin: Any = 0.0,
         name: str = "hull_geometry",
@@ -101,6 +159,12 @@ class SectionLoftProblem:
                 raise ValueError(f"{label} must match station_parameters.")
         if longitudinal_fairness_weight < 0.0:
             raise ValueError("longitudinal_fairness_weight must be nonnegative.")
+        if surface_formulation not in ("compatible_loft", "variational"):
+            raise ValueError(
+                "surface_formulation must be 'compatible_loft' or 'variational'."
+            )
+        if not np.isfinite(surface_constraint_scale) or surface_constraint_scale <= 0:
+            raise ValueError("surface_constraint_scale must be finite and positive.")
         self.length = length
         self.parameters = parameters
         self.drafts = drafts
@@ -113,6 +177,14 @@ class SectionLoftProblem:
         self.longitudinal_degree = int(longitudinal_degree)
         self.section_fairness_weights = section_fairness_weights
         self.longitudinal_fairness_weight = float(longitudinal_fairness_weight)
+        self.surface_formulation = surface_formulation
+        self.surface_num_longitudinal_control_points = (
+            None
+            if surface_num_longitudinal_control_points is None
+            else int(surface_num_longitudinal_control_points)
+        )
+        self.surface_fairness_weights = surface_fairness_weights
+        self.surface_constraint_scale = float(surface_constraint_scale)
         self.pointed_ends = bool(pointed_ends)
         self.x_origin = x_origin
         self.name = name
@@ -126,6 +198,16 @@ class SectionLoftProblem:
     ) -> HullGeometry:
         """Build and solve the entire section/surface system once."""
         system = VariationalSystem(name=self.name)
+        assembly = self.assemble(system)
+        result = system.solve(
+            tolerance=tolerance,
+            max_iter=max_iter,
+            print_status=print_status,
+        )
+        return assembly.finalize(result, hydrostatic_section_parameters)
+
+    def assemble(self, system: VariationalSystem) -> SectionLoftAssembly:
+        """Register every section and the hull surface without running Newton."""
         assemblies: list[SectionAssembly] = []
         for index, parameter in enumerate(self.parameters):
             problem = SectionProblem(
@@ -159,36 +241,138 @@ class SectionLoftProblem:
             self.x_origin + self.length * (parameter - 0.5)
             for parameter in loft_parameters
         ]
-        surface = CompatibleLoft.create(
-            sections=loft_sections,
-            station_parameters=loft_parameters,
-            x_coordinates=x_coordinates,
-            longitudinal_degree=self.longitudinal_degree,
+        surface_assembly: FSurfaceAssembly | None = None
+        if self.surface_formulation == "compatible_loft":
+            surface = CompatibleLoft.create(
+                sections=loft_sections,
+                station_parameters=loft_parameters,
+                x_coordinates=x_coordinates,
+                longitudinal_degree=self.longitudinal_degree,
+                name=f"{self.name}_surface",
+            )
+            if self.longitudinal_fairness_weight:
+                system.add_objective(
+                    self.longitudinal_fairness_weight * surface.fairness_energy((0, 2))
+                )
+        else:
+            surface_assembly = self._assemble_variational_surface(
+                system,
+                loft_sections,
+                loft_parameters,
+                x_coordinates,
+            )
+            surface = surface_assembly.surface
+
+        return SectionLoftAssembly(
+            surface=surface,
+            section_assemblies=tuple(assemblies),
+            section_parameters=self.parameters.copy(),
+            surface_assembly=surface_assembly,
+        )
+
+    def _assemble_variational_surface(
+        self,
+        system: VariationalSystem,
+        sections: Sequence[FSplineCurve],
+        station_parameters: np.ndarray,
+        x_coordinates: Sequence[Any],
+    ) -> FSurfaceAssembly:
+        """Couple a free surface state exactly to all generating sections."""
+        transverse_space = sections[0].space
+        transverse_knots = np.asarray(
+            transverse_space.knots[transverse_space.knot_indices[0]], dtype=float
+        )
+        longitudinal_count = self.surface_num_longitudinal_control_points
+        if longitudinal_count is None:
+            longitudinal_count = max(len(sections), self.longitudinal_degree + 1)
+        if longitudinal_count <= self.longitudinal_degree:
+            raise ValueError(
+                "surface_num_longitudinal_control_points must exceed "
+                "longitudinal_degree."
+            )
+        if longitudinal_count < len(sections):
+            raise ValueError(
+                "surface_num_longitudinal_control_points must be at least the "
+                "number of generating sections."
+            )
+        longitudinal_space = lfs.BSplineSpace(
+            num_parametric_dimensions=1,
+            degree=(self.longitudinal_degree,),
+            coefficients_shape=(longitudinal_count,),
+        )
+        longitudinal_knots = np.asarray(
+            longitudinal_space.knots[longitudinal_space.knot_indices[0]], dtype=float
+        )
+        fairness_weights = self.surface_fairness_weights
+        if fairness_weights is None and self.longitudinal_fairness_weight:
+            fairness_weights = {
+                (2, 0): 1.0,
+                (1, 1): 2.0,
+                (0, 2): self.longitudinal_fairness_weight,
+            }
+        problem = FSurfaceProblem(
+            num_control_points=(
+                sections[0].coefficients.shape[0],
+                longitudinal_count,
+            ),
+            degree=(self.section_degree, self.longitudinal_degree),
+            knots=(transverse_knots, longitudinal_knots),
+            fairness_weights=fairness_weights,
             name=f"{self.name}_surface",
         )
-        if self.longitudinal_fairness_weight:
-            system.add_objective(
-                self.longitudinal_fairness_weight * surface.fairness_energy((0, 2))
-            )
 
-        result = system.solve(
-            tolerance=tolerance,
-            max_iter=max_iter,
-            print_status=print_status,
+        degree = int(transverse_space.degree[0])
+        transverse_count = sections[0].coefficients.shape[0]
+        greville = np.asarray(
+            [
+                np.mean(transverse_knots[index + 1 : index + degree + 1])
+                for index in range(transverse_count)
+            ]
         )
-        solved_sections = tuple(assembly.finalize(result) for assembly in assemblies)
-        section_parameters = (
-            np.linspace(0.0, 1.0, 21)
-            if hydrostatic_section_parameters is None
-            else np.asarray(hydrostatic_section_parameters, dtype=float)
+        surface_coordinates: list[np.ndarray] = []
+        surface_targets: list[csdl.Variable] = []
+        for section, station, x_coordinate in zip(
+            sections, station_parameters, x_coordinates
+        ):
+            section_points = section.evaluate(greville)
+            z = section_points[:, 0].reshape((transverse_count, 1))
+            y = section_points[:, 1].reshape((transverse_count, 1))
+            x = 0.0 * z + x_coordinate
+            surface_targets.append(csdl.concatenate((x, y, z), axis=1))
+            surface_coordinates.append(
+                np.column_stack((greville, np.full(transverse_count, float(station))))
+            )
+        problem.add_points_constraint(
+            np.concatenate(tuple(surface_coordinates), axis=0),
+            csdl.concatenate(tuple(surface_targets), axis=0),
+            scale=self.surface_constraint_scale,
         )
-        hydrostatics = compute_hydrostatics(surface, section_parameters)
-        validity = evaluate_surface_validity(surface)
-        return HullGeometry(
-            surface=surface,
-            sections=solved_sections,
-            section_parameters=self.parameters.copy(),
-            hydrostatics=hydrostatics,
-            validity=validity,
-            variational_result=result,
-        )
+        initial_control_points = None
+        if longitudinal_count == len(sections):
+            longitudinal_basis = longitudinal_space.compute_basis_matrix(
+                station_parameters[:, None]
+            ).toarray()
+            longitudinal_map = np.linalg.solve(
+                longitudinal_basis, np.eye(longitudinal_count)
+            )
+            physical_sections: list[np.ndarray] = []
+            for section, x_coordinate in zip(sections, x_coordinates):
+                coefficients = np.asarray(section.coefficients.value, dtype=float)
+                physical_sections.append(
+                    np.column_stack(
+                        (
+                            np.full(transverse_count, _current_scalar(x_coordinate)),
+                            coefficients[:, 1],
+                            coefficients[:, 0],
+                        )
+                    )
+                )
+            initial_control_points = np.empty((transverse_count, longitudinal_count, 3))
+            for transverse_index in range(transverse_count):
+                station_values = np.asarray(
+                    [points[transverse_index] for points in physical_sections]
+                )
+                initial_control_points[transverse_index] = (
+                    longitudinal_map @ station_values
+                )
+        return problem.assemble(system, initial_control_points)

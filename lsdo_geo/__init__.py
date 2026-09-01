@@ -33,6 +33,7 @@ from .core.ship_geometry import (
     PatchConnection,
     PatchGraph,
     SectionAssembly,
+    SectionLoftAssembly,
     SectionLoftProblem,
     SectionProblem,
     SectionTemplate,

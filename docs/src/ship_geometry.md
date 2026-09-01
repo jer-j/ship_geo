@@ -59,6 +59,22 @@ constraints converge in one global Newton iteration.
 
 ![Two F-Surface patches in one global solve](images/f_surface_global_solve.png)
 
+`SectionLoftProblem` exposes both surface formulations through the same public
+builder:
+
+- `surface_formulation="compatible_loft"` applies the fixed CSDL lofting map
+  and introduces no independent surface state.
+- `surface_formulation="variational"` registers an `FSurfaceProblem` in the
+  section system. At every generating station, the surface is constrained at
+  the transverse Greville abscissae. Because the surface and sections share
+  the transverse degree and knot vector, these constraints enforce equality
+  of the complete B-spline sections, not only the sampled points.
+
+The variational mode therefore has one state per F-Spline section and one
+surface-control-net state, but still invokes `VariationalSystem.solve()` only
+once. `SectionLoftProblem.assemble(system)` also lets that complete group be
+combined with other hull components before the global solve.
+
 ## Constants and differentiable variables
 
 Whether a quantity belongs in the CSDL graph depends on whether a legitimate
