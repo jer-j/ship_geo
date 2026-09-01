@@ -13,6 +13,7 @@ Run the verification suite and geometry demonstrations:
 ```bash
 pytest
 python examples/f_spline_ship_section.py
+python examples/f_surface_global_solve.py
 python examples/first_principles_fspline_hull.py
 ```
 

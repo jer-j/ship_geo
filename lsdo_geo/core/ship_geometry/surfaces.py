@@ -39,6 +39,10 @@ class TensorProductSurface:
 
     function: lfs.Function
     quadrature_order: tuple[int, int] = (6, 6)
+    lagrange_multipliers: csdl.Variable | None = None
+    constraint_residual: csdl.Variable | None = None
+    stationarity_residual: csdl.Variable | None = None
+    fairness_objective: csdl.Variable | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.function.space, lfs.BSplineSpace):

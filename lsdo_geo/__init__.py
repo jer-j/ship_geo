@@ -25,6 +25,8 @@ from .core.ship_geometry import (
     FormCurveAssembly,
     FormCurveKind,
     FormCurveProblem,
+    FSurfaceAssembly,
+    FSurfaceProblem,
     HullGeometry,
     Hydrostatics,
     OrientedSurfacePatch,

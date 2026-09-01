@@ -35,4 +35,5 @@ jobs:
       run: |
         python examples/f_spline_ship_section.py --output /tmp/f_spline.png
         python examples/first_principles_fspline_hull.py
+        python examples/f_surface_global_solve.py
         python examples/dtmb_5415_validation.py --output /tmp/dtmb_5415.png

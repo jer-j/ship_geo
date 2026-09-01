@@ -16,6 +16,7 @@ from .diagnostics import (
     recommended_refinement_knots,
     section_self_intersections,
 )
+from .f_surface import FSurfaceAssembly, FSurfaceProblem
 from .form_curves import (
     FormCurve,
     FormCurveAssembly,
@@ -58,6 +59,8 @@ __all__ = [
     "ClosedSurface",
     "ClosureReport",
     "CompatibleLoft",
+    "FSurfaceAssembly",
+    "FSurfaceProblem",
     "FormCurve",
     "FormCurveAssembly",
     "FormCurveKind",

@@ -34,6 +34,31 @@ $$
 linear map from the solved transverse control polygons to the surface control
 net, so it creates no nested nonlinear solve.
 
+`FSurfaceProblem` adds a free tensor-product surface control net when lofted
+section coefficients alone are not sufficiently general. Its primary
+`assemble(system)` interface contributes the control net, surface-fairness
+energy, point or derivative constraints, and exact control-point constraints
+without calling Newton. Several curves and surfaces can therefore share the
+same `VariationalSystem.solve()` call. The standalone `FSurfaceProblem.solve()`
+method is only a convenience wrapper around that assembly path.
+
+The default thin-plate objective is
+
+$$
+J_S=\int_0^1\int_0^1
+\left(
+\lVert\mathbf S_{uu}\rVert^2
++2\lVert\mathbf S_{uv}\rVert^2
++\lVert\mathbf S_{vv}\rVert^2
+\right)\,du\,dv.
+$$
+
+The coupled demonstration below contains two independent implicit surface
+control nets and an exact cubic shared edge. Both states and the continuity
+constraints converge in one global Newton iteration.
+
+![Two F-Surface patches in one global solve](images/f_surface_global_solve.png)
+
 ## Constants and differentiable variables
 
 Whether a quantity belongs in the CSDL graph depends on whether a legitimate
@@ -133,8 +158,11 @@ refinement. Structured CSDL meshes preserve derivatives at their vertices;
 their current numerical state can be seam-welded for watertightness checks and
 exported to STL or OBJ as a terminal, non-differentiable operation.
 
-The next published validation hull is DTMB 5415. Its sonar dome is represented
+The first published validation hull is DTMB 5415. Its sonar dome is represented
 as a separate connected region and receives its own approximation-error and
-refinement report, rather than being smoothed into the main forebody.
+refinement report, rather than being smoothed into the main forebody. The fine
+model reaches a global RMS surface error of $0.350\ \mathrm{mm}$ and a sonar
+dome RMS error of $0.233\ \mathrm{mm}$ on the $6.119\ \mathrm{m}$ reference
+model.
 
 ![One-solve F-Spline hull](images/first_principles_fspline_hull.png)

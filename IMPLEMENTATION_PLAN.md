@@ -62,18 +62,19 @@ Status: round-bilge and hard-chine templates implemented.
 
 ## Milestone 4: hull surfaces
 
-Status: compatible loft, global surface fairness, pointed end closures,
-waterplane and transom caps, and patch graph implemented. A free
-surface-control-net variational state remains future work because the
-compatible loft already couples all section states in one Newton solve.
+Status: compatible loft, free surface-control-net variational states, global
+surface fairness, pointed end closures, waterplane and transom caps, and patch
+graph implemented. Every free surface is assembled into the shared
+`VariationalSystem`, so several curves, sections, and surface patches can use
+one Newton solve.
 
 - Skin compatible section-control polygons into tensor-product B-spline
   surfaces.
 - Add longitudinal fairness and guide-curve constraints.
 - Implement stem, transom, deck, and centerplane caps.
 - Introduce a patch graph with positional and tangent-continuity residuals.
-- Add an optional coupled surface-fairness solve after the section-based method
-  has been verified.
+- Add free `FSurfaceProblem` control nets to the same global KKT system when a
+  section-derived compatible loft is not sufficiently expressive.
 
 ## Milestone 5: hydrostatics and validity
 

@@ -24,6 +24,8 @@ design optimization.
   moment constraints.
 - Round-bilge and hard-chine compatible section templates.
 - One-solve section-family assembly and tensor-product surface lofting.
+- Free F-Surface control nets with thin-plate fairness, geometric constraints,
+  and multi-patch continuity in the same global Newton solve.
 - Pointed boundaries, exact waterplane/transom caps, and a surface
   patch-connectivity graph.
 - General oriented multi-patch hydrostatics, including displacement, centers,
@@ -88,12 +90,13 @@ Run the complete demonstration with:
 ```bash
 python examples/f_spline_ship_section.py
 python examples/first_principles_fspline_hull.py
+python examples/f_surface_global_solve.py
 python examples/dtmb_5415_validation.py
 ```
 
-The scripts write section-family, complete-hull, and DTMB 5415 validation
-figures and print KKT, hydrostatic, derivative, validity, and regional
-approximation diagnostics.
+The scripts write section-family, coupled-surface, complete-hull, and DTMB 5415
+validation figures and print KKT, hydrostatic, derivative, validity, and
+regional approximation diagnostics.
 
 ## Attribution
 
