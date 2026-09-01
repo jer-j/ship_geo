@@ -1,44 +1,61 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lsdo_geo"
-description = "A package for geometry and state modeling/representation, parameterization, and mesh creation for MDO."
-readme = "README.md"
-requires-python = ">=3.9"
-license = {file = "LICENSE.txt"}
-keywords = ["geoemtry", "parameterization", "meshing", "representation", "modeling", "states"]
-authors = [{name = "Andrew Fletcher", email = "afletcher168@gmail.com"}]
-dependencies = [
-    'numpy',
-    'vedo',
-    'pyvista',
-    'joblib',
-    'pandas',
-    'scipy',
-    #'csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git',
-    #'lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git'
-]
+name = "ship_geo"
 version = "0.1.0"
+description = "Differentiable, first-principles ship geometry built on CSDL and B-splines."
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = {file = "LICENSE.txt"}
+keywords = [
+    "ship design",
+    "geometry",
+    "B-splines",
+    "F-splines",
+    "multidisciplinary design optimization",
+]
+authors = [
+    {name = "Andrew Fletcher", email = "afletcher168@gmail.com"},
+    {name = "Jeremy John"},
+]
+dependencies = [
+    "numpy>=1.24",
+    "csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git",
+    "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git",
+    "lsdo_b_splines_cython @ git+https://github.com/LSDOlab/lsdo_b_splines_cython.git",
+    "vedo",
+    "pyvista",
+    "joblib",
+    "pandas",
+]
 
 [project.optional-dependencies]
-test = ['pytest']
+test = [
+    "pytest>=8",
+    "matplotlib>=3.8",
+]
 docs = [
-    'myst-nb',
-    'sphinx==5.3.0',
-    'sphinx_rtd_theme',
-    'sphinx-copybutton',
-    'sphinx-autoapi==2.1.0',
-    'astroid==2.15.5',
-    'numpydoc',
-    'gitpython',
-    'sphinxcontrib-collections @ git+https://github.com/anugrahjo/sphinx-collections.git',
-    'sphinxcontrib-bibtex',
+    "myst-nb",
+    "sphinx>=7",
+    "sphinx-rtd-theme",
+    "sphinx-copybutton",
+    "sphinx-autoapi",
+    "sphinxcontrib-bibtex",
+    "numpydoc",
 ]
 
 [tool.setuptools]
 package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
-exclude = ["tutorials"]
+include = ["lsdo_geo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    "ignore:Conversion of an array with ndim > 0 to a scalar is deprecated:DeprecationWarning:csdl_alpha.*",
+    "ignore:invalid escape sequence.*:DeprecationWarning:lsdo_function_spaces.*",
+]

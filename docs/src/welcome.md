@@ -1,36 +1,10 @@
-# Welcome to lsdo_project_template
+# ship_geo
 
-![alt text](/src/images/lsdolab.png "Title displayed")
+`ship_geo` extends the LSDO geometry stack with differentiable,
+first-principles ship geometry. Its first primitive is a CSDL-native F-Spline:
+a fair B-spline determined from naval-architecture form constraints.
 
-This page describes conceptually the purpose of your package at a high-level.
-Start with a one sentence description of your package.
-For example, "This repository serves as a template for all LSDOlab projects with regard to documentation, testing and hosting of open-source code."
-Include figures from the relevant paper and citation.
-
-# Cite us
-```none
-@article{lsdo2023,
-        Author = { Author 1, Author 2, and Author 3},
-        Journal = {Name of the Journal},
-        Title = {Title of your paper},
-        pages = {203},
-        year = {2023},
-        issn = {0123-4567},
-        doi = {https://doi.org/}
-        }
-```
-
-<!-- Remove/add custom pages from/to toc as per your package's requirement -->
-
-```{toctree}
-:maxdepth: 1
-:hidden:
-
-src/getting_started
-src/background
-src/tutorials
-src/custom_1
-src/custom_2
-src/examples
-src/api
-```
+The project reuses `lsdo_function_spaces` and `lsdo_b_splines_cython` for
+spline representation and fast sparse basis evaluation. The fairing problem,
+constraints, KKT residual, Newton solve, and implicit derivatives live in the
+CSDL graph.
