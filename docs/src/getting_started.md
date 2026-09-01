@@ -8,11 +8,12 @@ cd ship_geo
 python -m pip install -e ".[test]"
 ```
 
-Run the verification suite and ship-section demonstration:
+Run the verification suite and geometry demonstrations:
 
 ```bash
 pytest
 python examples/f_spline_ship_section.py
+python examples/first_principles_fspline_hull.py
 ```
 
 The public Python namespace remains `lsdo_geo` so existing LSDO code continues

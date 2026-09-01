@@ -27,6 +27,7 @@ from .constraints import (
     PointConstraint,
     TangentAngleConstraint,
 )
+from .variational import ConstraintHandle, VariationalResult, VariationalSystem
 
 _MAX_BACKEND_DERIVATIVE_ORDER = 2
 
@@ -199,6 +200,30 @@ class FSplineCurve:
         )
 
 
+@dataclass
+class FSplineAssembly:
+    """An F-Spline contribution registered with a global variational system."""
+
+    curve: FSplineCurve
+    state_index: int
+    constraint_handle: ConstraintHandle
+
+    def finalize(self, result: VariationalResult) -> FSplineCurve:
+        """Attach global KKT diagnostics to the assembled curve."""
+        self.curve.stationarity_residual = result.stationarity_residuals[
+            self.state_index
+        ]
+        if result.constraint_residual is not None:
+            self.curve.constraint_residual = result.constraint_residual[
+                self.constraint_handle.start : self.constraint_handle.stop
+            ]
+        if result.lagrange_multipliers is not None:
+            self.curve.lagrange_multipliers = result.lagrange_multipliers[
+                self.constraint_handle.start : self.constraint_handle.stop
+            ]
+        return self.curve
+
+
 class FSplineProblem:
     """Define and solve a constrained F-Spline problem.
 
@@ -354,12 +379,30 @@ class FSplineProblem:
         max_iter: int = 100,
         print_status: bool = False,
     ) -> FSplineCurve:
-        """Construct and solve the CSDL F-Spline KKT system."""
+        """Solve one curve through the shared variational assembly API."""
+        system = VariationalSystem(name=self.name)
+        assembly = self.assemble(
+            system=system,
+            initial_control_points=initial_control_points,
+        )
+        result = system.solve(
+            tolerance=tolerance,
+            max_iter=max_iter,
+            print_status=print_status,
+        )
+        return assembly.finalize(result)
+
+    def assemble(
+        self,
+        system: VariationalSystem,
+        initial_control_points: npt.ArrayLike | None = None,
+    ) -> FSplineAssembly:
+        """Add this curve to a shared KKT system without running Newton."""
         try:
             csdl.get_current_recorder()
         except ValueError as error:
             raise RuntimeError(
-                "FSplineProblem.solve requires an active csdl.Recorder."
+                "FSplineProblem.assemble requires an active csdl.Recorder."
             ) from error
         if not self.constraints:
             raise ValueError("at least one form constraint is required.")
@@ -396,32 +439,16 @@ class FSplineProblem:
                 f"received {num_constraints} scalar constraints for "
                 f"{num_coefficient_values} coefficient values."
             )
-
-        multipliers = csdl.ImplicitVariable(
-            value=np.zeros(num_constraints),
-            name=f"{self.name}_lagrange_multipliers",
-        )
-        lagrangian = fairness_objective + csdl.vdot(multipliers, constraint_residual)
-        stationarity_residual = csdl.derivative(lagrangian, coefficients).reshape(
-            coefficients.shape
-        )
-
-        solver = csdl.nonlinear_solvers.Newton(
-            name=f"{self.name}_newton",
-            tolerance=tolerance,
-            max_iter=max_iter,
-            print_status=print_status,
-            residual_jac_kwargs={"concatenate_ofs": True},
-        )
-        solver.add_state(coefficients, stationarity_residual)
-        solver.add_state(multipliers, constraint_residual)
-        solver.run()
-
-        curve.lagrange_multipliers = multipliers
         curve.constraint_residual = constraint_residual
-        curve.stationarity_residual = stationarity_residual
         curve.fairness_objective = fairness_objective
-        return curve
+        state_index = system.add_state(coefficients, name=self.name)
+        system.add_objective(fairness_objective)
+        constraint_handle = system.add_constraint(constraint_residual)
+        return FSplineAssembly(
+            curve=curve,
+            state_index=state_index,
+            constraint_handle=constraint_handle,
+        )
 
     def _constraint_residual(
         self, curve: FSplineCurve, constraint: FSplineConstraint

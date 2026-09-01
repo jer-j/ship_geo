@@ -38,14 +38,19 @@ Status: implemented in the initial `ship_geo` milestone.
 
 ## Milestone 2: curves of form
 
-- Add specialized wrappers for the sectional-area curve, design waterline,
+Status: implemented for scalar longitudinal distributions.
+
+- Add specialized semantics for the sectional-area curve, design waterline,
   centerplane profile, deck edge, chines, and longitudinal parameter
   distributions.
-- Add dimensional and nondimensional coordinate frames.
+- Use a fixed nondimensional longitudinal coordinate with dimensional CSDL
+  ordinates.
 - Establish sign, orientation, and moment conventions for every curve type.
 - Add deterministic input validation and useful initial-guess construction.
 
 ## Milestone 3: section engine
+
+Status: round-bilge and hard-chine templates implemented.
 
 - Define reusable round-bilge and chined section templates from F-Spline
   segments.
@@ -57,6 +62,11 @@ Status: implemented in the initial `ship_geo` milestone.
 
 ## Milestone 4: hull surfaces
 
+Status: compatible loft, global surface fairness, pointed end closures,
+waterplane and transom caps, and patch graph implemented. A free
+surface-control-net variational state remains future work because the
+compatible loft already couples all section states in one Newton solve.
+
 - Skin compatible section-control polygons into tensor-product B-spline
   surfaces.
 - Add longitudinal fairness and guide-curve constraints.
@@ -66,6 +76,10 @@ Status: implemented in the initial `ship_geo` milestone.
   has been verified.
 
 ## Milestone 5: hydrostatics and validity
+
+Status: general oriented multi-patch hydrostatics and sampled validity fields
+implemented. The divergence-theorem formulation is verified against an exact
+box, an exact Wigley surface, and a transom-ended triangular prism.
 
 - Integrate volume and first moments over closed parametric surfaces.
 - Compute displacement, centers of buoyancy and flotation, waterplane area,
@@ -77,13 +91,27 @@ Status: implemented in the initial `ship_geo` milestone.
 
 ## Milestone 6: approximation and refinement
 
+Status: exact differentiable curve/surface knot insertion, CSDL offset-table
+fitting, residual-driven span indicators, and DTMB 5415 regional convergence
+validation implemented. The sonar dome, dome transition, and main hull remain
+distinct representation regions.
+
 - Fit spline patches to offset tables for validation, not as the primary design
   mechanism.
 - Add knot insertion and residual-based refinement.
-- Demonstrate convergence on Series 60, DTMB 5415, KCS, and KVLCC2 geometries.
+- Demonstrate regional and global convergence on DTMB 5415, including its
+  sonar dome, dome-to-hull transition, main hull, and transom termination.
 - Hold representation topology fixed during each gradient-based optimization.
 
+The fine DTMB 5415 approximation currently reaches a global RMS surface error
+of $0.350\ \mathrm{mm}$ and a sonar-dome RMS error of
+$0.233\ \mathrm{mm}$ on the $6.119\ \mathrm{m}$ reference model.
+
 ## Milestone 7: downstream geometry
+
+Status: structured CSDL surface meshes, seam-welded watertightness checks, and
+terminal STL/OBJ export are implemented. Production B-rep sewing and STEP
+export remain deferred.
 
 - Produce analysis-specific point sets and surface meshes.
 - Reuse the applicable `lsdo_geo` projection, refitting, and mesh interfaces.
