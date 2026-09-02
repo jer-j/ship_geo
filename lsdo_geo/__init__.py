@@ -25,10 +25,15 @@ from .core.ship_geometry import (
     FormCurveAssembly,
     FormCurveKind,
     FormCurveProblem,
+    FormParameterHullAssembly,
+    FormParameterHullGeometry,
+    FormParameterHullProblem,
     FSurfaceAssembly,
     FSurfaceProblem,
     HullGeometry,
     Hydrostatics,
+    LongitudinalFitTargets,
+    NavalHullParameters,
     OrientedSurfacePatch,
     PatchConnection,
     PatchGraph,
@@ -74,6 +79,6 @@ from .core.splines import (
 )
 
 _REPO_ROOT_FOLDER = Path(__file__).parents[0]
-IMPORT_FOLDER = _REPO_ROOT_FOLDER / 'core' / 'stored_files' / 'imports'
-REFIT_FOLDER = _REPO_ROOT_FOLDER / 'core' / 'stored_files' / 'refits'
-PROJECTIONS_FOLDER = _REPO_ROOT_FOLDER / 'core' / 'stored_files' / 'projections'
+IMPORT_FOLDER = _REPO_ROOT_FOLDER / "core" / "stored_files" / "imports"
+REFIT_FOLDER = _REPO_ROOT_FOLDER / "core" / "stored_files" / "refits"
+PROJECTIONS_FOLDER = _REPO_ROOT_FOLDER / "core" / "stored_files" / "projections"

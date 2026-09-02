@@ -23,6 +23,13 @@ from .form_curves import (
     FormCurveKind,
     FormCurveProblem,
 )
+from .form_parameter_hull import (
+    FormParameterHullAssembly,
+    FormParameterHullGeometry,
+    FormParameterHullProblem,
+    LongitudinalFitTargets,
+    NavalHullParameters,
+)
 from .hull import HullGeometry, SectionLoftAssembly, SectionLoftProblem
 from .hydrostatics import (
     Hydrostatics,
@@ -65,8 +72,13 @@ __all__ = [
     "FormCurveAssembly",
     "FormCurveKind",
     "FormCurveProblem",
+    "FormParameterHullAssembly",
+    "FormParameterHullGeometry",
+    "FormParameterHullProblem",
     "HullGeometry",
     "Hydrostatics",
+    "LongitudinalFitTargets",
+    "NavalHullParameters",
     "OrientedSurfacePatch",
     "PatchConnection",
     "PatchGraph",

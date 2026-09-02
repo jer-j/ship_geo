@@ -125,6 +125,21 @@ export remain deferred.
 - Add watertight export after the differentiable internal representation is
   stable.
 
+## Milestone 8: naval form-parameter inverse design
+
+Status: primary form-parameter hierarchy and auxiliary-function fitting kernel
+implemented. DTMB 5415 extraction and surface-level calibration are next.
+
+- Expose $L_{PP}$, $B$, $T$, $\nabla$, $x_{LCB}$, and $C_{WP}$ as primary
+  CSDL inputs constrained exactly on the curves of form.
+- Fit sectional-area, waterline, draft, deadrise, and flare distributions as
+  auxiliary functions without relaxing the primary constraints.
+- Support a pointed bow and transom stern in the same section-loft topology.
+- Extract primary and auxiliary observations from the canonical DTMB 5415
+  geometry, including its separate sonar-dome component.
+- Calibrate auxiliary variables against surface offsets and report both
+  surface error and errors in every primary naval parameter.
+
 ## Verification policy
 
 Every new primitive must include:

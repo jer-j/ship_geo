@@ -7,6 +7,9 @@ from lsdo_geo import (
     ClosedSurface,
     FormCurveKind,
     FormCurveProblem,
+    FormParameterHullProblem,
+    LongitudinalFitTargets,
+    NavalHullParameters,
     SectionLoftProblem,
     SectionProblem,
     SectionTemplate,
@@ -26,6 +29,58 @@ from lsdo_geo import (
     tessellate_closed_surface,
     wigley_surface,
 )
+
+
+def test_form_parameter_hull_preserves_primary_naval_parameters():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+
+    beam = csdl.Variable(value=4.0, name="form_parameter_beam")
+    primary = NavalHullParameters(
+        length_between_perpendiculars=10.0,
+        beam=beam,
+        draft=2.0,
+        displacement=50.0,
+        lcb=0.0,
+        waterplane_coefficient=0.7,
+    )
+    targets = LongitudinalFitTargets(
+        station_parameters=[0.25, 0.5, 1.0],
+        half_breadths=[1.5, 2.0, 1.0],
+        half_areas=[2.0, 3.0, 1.0],
+        drafts=[2.0, 2.0, 1.5],
+        deadrise_angles=[0.3, 0.2, 0.1],
+        flare_angles=[0.0, 0.0, 0.1],
+        maximum_beam_parameter=0.5,
+        maximum_draft_parameter=0.5,
+    )
+    geometry = FormParameterHullProblem(
+        primary,
+        targets,
+        num_form_control_points=6,
+        num_section_control_points=7,
+        name="naval_parameter_test",
+    ).solve(max_iter=30)
+    recovered = geometry.recovered_primary_parameters()
+
+    np.testing.assert_allclose(recovered["beam"].value, [4.0], atol=2e-11)
+    np.testing.assert_allclose(recovered["draft"].value, [2.0], atol=2e-11)
+    np.testing.assert_allclose(recovered["displacement"].value, [50.0], atol=2e-10)
+    np.testing.assert_allclose(recovered["lcb"].value, [0.0], atol=2e-11)
+    np.testing.assert_allclose(
+        recovered["waterplane_coefficient"].value, [0.7], atol=2e-11
+    )
+    np.testing.assert_allclose(
+        csdl.derivative(recovered["beam"], beam).value,
+        [[1.0]],
+        atol=2e-10,
+    )
+    assert len(geometry.hull.variational_result.stationarity_residuals) == 8
+    assert (
+        np.max(np.abs(geometry.hull.variational_result.constraint_residual.value))
+        < 1e-10
+    )
+    recorder.stop()
 
 
 def test_sectional_area_curve_integrals_and_implicit_derivative():

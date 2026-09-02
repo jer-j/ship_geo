@@ -129,7 +129,7 @@ class SectionLoftProblem:
         surface_num_longitudinal_control_points: int | None = None,
         surface_fairness_weights: dict[tuple[int, int], float] | None = None,
         surface_constraint_scale: float = 1.0,
-        pointed_ends: bool = True,
+        pointed_ends: bool | tuple[bool, bool] = True,
         x_origin: Any = 0.0,
         name: str = "hull_geometry",
     ) -> None:
@@ -138,8 +138,20 @@ class SectionLoftProblem:
             raise ValueError("at least two interior sections are required.")
         if np.any(np.diff(parameters) <= 0.0):
             raise ValueError("station_parameters must be strictly increasing.")
-        if pointed_ends and not (parameters[0] > 0.0 and parameters[-1] < 1.0):
-            raise ValueError("pointed-end interior stations must lie inside (0, 1).")
+        if isinstance(pointed_ends, tuple):
+            if len(pointed_ends) != 2:
+                raise ValueError("pointed_ends must be a bool or a two-bool tuple.")
+            pointed_bow, pointed_stern = map(bool, pointed_ends)
+        else:
+            pointed_bow = pointed_stern = bool(pointed_ends)
+        if pointed_bow and parameters[0] <= 0.0:
+            raise ValueError("a pointed bow requires the first station inside (0, 1].")
+        if not pointed_bow and parameters[0] < 0.0:
+            raise ValueError("the first station must lie in [0, 1].")
+        if pointed_stern and parameters[-1] >= 1.0:
+            raise ValueError("a pointed stern requires the last station inside [0, 1).")
+        if not pointed_stern and parameters[-1] > 1.0:
+            raise ValueError("the last station must lie in [0, 1].")
         for values, label in (
             (drafts, "drafts"),
             (half_breadths, "half_breadths"),
@@ -185,7 +197,7 @@ class SectionLoftProblem:
         )
         self.surface_fairness_weights = surface_fairness_weights
         self.surface_constraint_scale = float(surface_constraint_scale)
-        self.pointed_ends = bool(pointed_ends)
+        self.pointed_ends = (pointed_bow, pointed_stern)
         self.x_origin = x_origin
         self.name = name
 
@@ -229,13 +241,17 @@ class SectionLoftProblem:
 
         loft_sections: list[FSplineCurve] = [assembly.curve for assembly in assemblies]
         loft_parameters = self.parameters.copy()
-        if self.pointed_ends:
-            loft_sections = [
-                collapsed_section(loft_sections[0], f"{self.name}_bow"),
-                *loft_sections,
-                collapsed_section(loft_sections[-1], f"{self.name}_stern"),
-            ]
-            loft_parameters = np.concatenate(([0.0], loft_parameters, [1.0]))
+        pointed_bow, pointed_stern = self.pointed_ends
+        if pointed_bow:
+            loft_sections.insert(
+                0, collapsed_section(loft_sections[0], f"{self.name}_bow")
+            )
+            loft_parameters = np.concatenate(([0.0], loft_parameters))
+        if pointed_stern:
+            loft_sections.append(
+                collapsed_section(loft_sections[-1], f"{self.name}_stern")
+            )
+            loft_parameters = np.concatenate((loft_parameters, [1.0]))
 
         x_coordinates = [
             self.x_origin + self.length * (parameter - 0.5)

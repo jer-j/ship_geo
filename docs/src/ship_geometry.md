@@ -117,6 +117,51 @@ Pointed bow and stern sections are explicit collapsed centerplane curves
 derived from the nearest interior section. Hard chines use an interior knot of
 multiplicity equal to the spline degree, producing a $C^0$ join.
 
+## Naval form-parameter hierarchy
+
+`FormParameterHullProblem` implements the MIT-style separation between primary
+naval-architecture particulars and auxiliary local shape controls. The primary
+input set is
+
+$$
+L_{PP},\quad B,\quad T,\quad \nabla,\quad x_{LCB},\quad C_{WP}.
+$$
+
+These quantities constrain the sectional-area, design-waterline, and draft
+curves exactly. For example, with $v\in[0,1]$ and $x=L_{PP}(v-1/2)$,
+
+$$
+2L_{PP}\int_0^1 A_{1/2}(v)\,dv=\nabla,
+$$
+
+$$
+L_{PP}\left(
+\frac{\int_0^1vA_{1/2}(v)\,dv}
+{\int_0^1A_{1/2}(v)\,dv}-\frac12
+\right)=x_{LCB},
+$$
+
+and
+
+$$
+\frac{2}{B}\int_0^1 b_{WL}(v)\,dv=C_{WP}.
+$$
+
+Sampled half-breadth, section-area, draft, deadrise, and flare distributions
+are auxiliary targets. Their squared mismatch selects among curves satisfying
+the primary constraints, while an integrated curvature term prevents the
+auxiliary fit from introducing oscillatory geometry. These targets may be CSDL
+variables and therefore remain differentiable design controls.
+
+The form curves and every transverse F-Spline section are assembled into one
+`VariationalSystem`. A transom-ended hull can use a collapsed bow with an
+uncollapsed stern by setting `pointed_ends=(True, False)`.
+
+The regression case recovers all six primary inputs to solver tolerance and
+verifies $dB_{recovered}/dB=1$. The next DTMB 5415 stage will extract these
+primary values from the canonical geometry, fit only the auxiliary
+distributions, and measure both form-parameter and final-surface residuals.
+
 ## Hydrostatics
 
 For a symmetric starboard half surface with outward area vector
