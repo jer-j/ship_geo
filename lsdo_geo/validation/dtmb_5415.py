@@ -11,7 +11,12 @@ from typing import Literal
 
 import lsdo_function_spaces as lfs
 import numpy as np
+import numpy.typing as npt
 
+from ..core.ship_geometry.form_parameter_hull import (
+    LongitudinalFitTargets,
+    NavalHullParameters,
+)
 from ..core.ship_geometry.refinement import fit_offset_surface
 from ..core.ship_geometry.surfaces import TensorProductSurface
 from .iges import PolynomialIGESPatch, read_polynomial_iges_surfaces
@@ -92,6 +97,24 @@ class DTMB5415Approximation:
     def sonar_dome(self) -> DTMB5415PatchFit:
         """Return the mandatory sonar-dome fit."""
         return self.patches[DTMB5415Region.SONAR_DOME]
+
+
+@dataclass(frozen=True)
+class DTMB5415FormData:
+    """Canonical particulars and extracted underwater auxiliary distributions.
+
+    ``fit_targets`` follows the complete wetted envelope, so its forward draft
+    observations include the sonar-dome protrusion. ``station_regions`` makes
+    that component identity explicit. The primary ``draft`` and its maximum
+    location are measured only on the main-hull face; the dome depth is retained
+    separately in ``measured_particulars``.
+    """
+
+    primary_parameters: NavalHullParameters
+    fit_targets: LongitudinalFitTargets
+    measured_particulars: dict[str, float]
+    longitudinal_coordinates: np.ndarray
+    station_regions: tuple[DTMB5415Region, ...]
 
 
 _FIT_LEVELS: dict[str, dict[DTMB5415Region, tuple[int, int]]] = {
@@ -239,6 +262,201 @@ def load_dtmb_5415(path: str | Path) -> DTMB5415Reference:
             DTMB5415Region.MAIN_HULL: main_hull,
         },
         source_path=source,
+    )
+
+
+def _constant_x_section(
+    patch: PolynomialIGESPatch,
+    function: lfs.Function,
+    x_coordinate: float,
+    search_resolution: int,
+    transverse_resolution: int,
+) -> np.ndarray:
+    """Intersect one regular patch with a constant-x transverse plane."""
+    u = np.linspace(0.0, 1.0, search_resolution)
+    v = np.linspace(0.0, 1.0, transverse_resolution)
+    u_grid, v_grid = np.meshgrid(u, v, indexing="ij")
+    coordinates = np.column_stack((u_grid.ravel(), v_grid.ravel()))
+    values = np.asarray(patch.evaluate(function, coordinates).value).reshape(
+        (search_resolution, transverse_resolution, 3)
+    )
+    intersections: list[tuple[float, float]] = []
+    for transverse_index, transverse_parameter in enumerate(v):
+        distance = values[:, transverse_index, 0] - x_coordinate
+        closest = int(np.argmin(np.abs(distance)))
+        tolerance = 1.0e-12 * max(1.0, float(np.ptp(values[:, transverse_index, 0])))
+        if abs(distance[closest]) <= tolerance:
+            intersections.append((float(u[closest]), float(transverse_parameter)))
+            continue
+        crossing = np.flatnonzero(distance[:-1] * distance[1:] <= 0.0)
+        if crossing.size == 0:
+            continue
+        index = int(crossing[0])
+        denominator = distance[index] - distance[index + 1]
+        fraction = 0.0 if abs(denominator) < 1.0e-14 else distance[index] / denominator
+        intersections.append(
+            (
+                float(u[index] + fraction * (u[index + 1] - u[index])),
+                float(transverse_parameter),
+            )
+        )
+    if not intersections:
+        raise ValueError(f"no patch intersection found at x={x_coordinate:.8g}.")
+    return np.asarray(patch.evaluate(function, intersections).value, dtype=float)
+
+
+def _underwater_section_properties(points: np.ndarray) -> tuple[float, ...]:
+    """Measure waterline breadth, draft, area, deadrise, and flare."""
+    ordered = points[np.argsort(points[:, 2])]
+    submerged = ordered[ordered[:, 2] <= 0.0]
+    emerged = ordered[ordered[:, 2] > 0.0]
+    if submerged.shape[0] < 3 or emerged.shape[0] == 0:
+        raise ValueError("section does not contain a resolved z=0 waterline crossing.")
+    lower = submerged[-1]
+    upper = emerged[0]
+    fraction = -lower[2] / (upper[2] - lower[2])
+    waterline = lower + fraction * (upper - lower)
+    underwater = np.vstack((submerged, waterline))
+    z = underwater[:, 2]
+    y = underwater[:, 1]
+    half_area = abs(float(np.trapz(y, z)))
+    deadrise = float(np.arctan2(z[1] - z[0], y[1] - y[0]))
+    flare = float(np.arctan2(y[-1] - y[-2], z[-1] - z[-2]))
+    return float(y[-1]), float(-np.min(z)), half_area, deadrise, flare
+
+
+def extract_dtmb_5415_form_data(
+    reference: DTMB5415Reference,
+    station_parameters: npt.ArrayLike | None = None,
+    integration_station_count: int = 61,
+    search_resolution: int = 121,
+    transverse_resolution: int = 241,
+) -> DTMB5415FormData:
+    """Extract MIT-style underwater form data from the canonical geometry.
+
+    The canonical model particulars follow the SIMMAN DTMB 5415 definition:
+    ``Lpp=5.719 m``, ``Bwl=0.768 m``, ``T=0.248 m``, and
+    ``displacement=0.554 m^3``. LCB and waterplane coefficient are measured
+    from constant-x intersections of the pinned IGES surface at ``z=0``.
+    The forward-bow face, including the sonar dome, remains a distinct source
+    component during extraction.
+    """
+    if integration_station_count < 11:
+        raise ValueError("integration_station_count must be at least 11.")
+    if search_resolution < 11 or transverse_resolution < 21:
+        raise ValueError("section intersection resolutions are too small.")
+    requested = (
+        np.linspace(0.03, 1.0, 13)
+        if station_parameters is None
+        else np.asarray(station_parameters, dtype=float).reshape(-1)
+    )
+    if (
+        requested.size < 3
+        or np.any(np.diff(requested) <= 0.0)
+        or np.any((requested <= 0.0) | (requested > 1.0))
+    ):
+        raise ValueError("station_parameters must increase inside (0, 1].")
+
+    functions = reference.build_functions()
+    length = 5.719
+    beam = 0.768
+    draft = 0.248
+    displacement = 0.554
+    main_patch = reference.patches[DTMB5415Region.MAIN_HULL]
+    main_function = functions[DTMB5415Region.MAIN_HULL]
+    aft_edge = main_patch.evaluate(
+        main_function,
+        np.column_stack((np.ones(101), np.linspace(0.0, 1.0, 101))),
+    )
+    aft_perpendicular = float(np.mean(np.asarray(aft_edge.value)[:, 0]))
+    forward_perpendicular = aft_perpendicular - length
+    transition_patch = reference.patches[DTMB5415Region.SONAR_DOME_TRANSITION]
+    transition_bounds = (
+        float(np.min(transition_patch.coefficients[:, :, 0])),
+        float(np.max(transition_patch.coefficients[:, :, 0])),
+    )
+
+    def region_at(x_coordinate: float) -> DTMB5415Region:
+        if x_coordinate < transition_bounds[0]:
+            return DTMB5415Region.SONAR_DOME
+        if x_coordinate < transition_bounds[1]:
+            return DTMB5415Region.SONAR_DOME_TRANSITION
+        return DTMB5415Region.MAIN_HULL
+
+    def properties(parameters: np.ndarray) -> np.ndarray:
+        output = np.zeros((parameters.size, 5))
+        for index, parameter in enumerate(parameters):
+            x_coordinate = forward_perpendicular + length * float(parameter)
+            region = region_at(x_coordinate)
+            points = _constant_x_section(
+                reference.patches[region],
+                functions[region],
+                x_coordinate,
+                search_resolution,
+                transverse_resolution,
+            )
+            output[index] = _underwater_section_properties(points)
+        return output
+
+    integration_parameters = np.linspace(0.005, 1.0, integration_station_count)
+    integrated = properties(integration_parameters)
+    full_parameters = np.concatenate(([0.0], integration_parameters))
+    half_breadths = np.concatenate(([0.0], integrated[:, 0]))
+    half_areas = np.concatenate(([0.0], integrated[:, 2]))
+    x_relative = length * (full_parameters - 0.5)
+    measured_volume = 2.0 * float(np.trapz(half_areas, x_relative))
+    measured_lcb = float(
+        np.trapz(x_relative * half_areas, x_relative) / np.trapz(half_areas, x_relative)
+    )
+    waterplane_area = 2.0 * float(np.trapz(half_breadths, x_relative))
+    waterplane_coefficient = waterplane_area / (length * beam)
+
+    sampled = properties(requested)
+    maximum_beam_index = int(np.argmax(integrated[:, 0]))
+    integration_coordinates = forward_perpendicular + length * integration_parameters
+    main_hull_indices = np.flatnonzero(integration_coordinates >= transition_bounds[1])
+    maximum_draft_index = int(
+        main_hull_indices[np.argmax(integrated[main_hull_indices, 1])]
+    )
+    maximum_underwater_depth = float(np.max(integrated[:, 1]))
+    requested_coordinates = forward_perpendicular + length * requested
+    targets = LongitudinalFitTargets(
+        station_parameters=requested,
+        half_breadths=sampled[:, 0],
+        half_areas=sampled[:, 2],
+        drafts=sampled[:, 1],
+        deadrise_angles=sampled[:, 3],
+        flare_angles=sampled[:, 4],
+        maximum_beam_parameter=float(integration_parameters[maximum_beam_index]),
+        maximum_draft_parameter=float(integration_parameters[maximum_draft_index]),
+    )
+    return DTMB5415FormData(
+        primary_parameters=NavalHullParameters(
+            length_between_perpendiculars=length,
+            beam=beam,
+            draft=draft,
+            displacement=displacement,
+            lcb=measured_lcb,
+            waterplane_coefficient=waterplane_coefficient,
+        ),
+        fit_targets=targets,
+        measured_particulars={
+            "length_between_perpendiculars": length,
+            "beam_at_waterline": 2.0 * float(np.max(integrated[:, 0])),
+            "canonical_moulded_draft": draft,
+            "main_hull_draft_from_sections": float(integrated[maximum_draft_index, 1]),
+            "maximum_underwater_depth_including_sonar_dome": (maximum_underwater_depth),
+            "sonar_dome_protrusion_below_moulded_draft": (
+                maximum_underwater_depth - draft
+            ),
+            "displacement_from_sections": measured_volume,
+            "canonical_displacement": displacement,
+            "lcb_from_midships": measured_lcb,
+            "waterplane_area": waterplane_area,
+            "waterplane_coefficient": waterplane_coefficient,
+        },
+        longitudinal_coordinates=requested_coordinates,
+        station_regions=tuple(region_at(x) for x in requested_coordinates),
     )
 
 

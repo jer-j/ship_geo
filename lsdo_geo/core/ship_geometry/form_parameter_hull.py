@@ -336,9 +336,12 @@ class FormParameterHullProblem:
             half_areas=curves[FormCurveKind.SECTIONAL_AREA]
             .evaluate(stations)
             .reshape((stations.size,)),
-            keel_tangent_angles=curves[FormCurveKind.DEADRISE]
-            .evaluate(stations)
-            .reshape((stations.size,)),
+            keel_tangent_angles=(
+                0.5 * np.pi
+                - curves[FormCurveKind.DEADRISE]
+                .evaluate(stations)
+                .reshape((stations.size,))
+            ),
             waterline_tangent_angles=curves[FormCurveKind.FLARE]
             .evaluate(stations)
             .reshape((stations.size,)),

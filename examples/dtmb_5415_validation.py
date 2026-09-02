@@ -14,9 +14,11 @@ from matplotlib.patches import Patch
 
 from lsdo_geo.validation import (
     DTMB5415Approximation,
+    DTMB5415FormData,
     DTMB5415Reference,
     DTMB5415Region,
     download_dtmb_5415,
+    extract_dtmb_5415_form_data,
     fit_dtmb_5415,
     load_dtmb_5415,
 )
@@ -404,6 +406,126 @@ def _plot_body_plan(
     _save(figure, output)
 
 
+def _plot_naval_parameter_extraction(
+    output: Path,
+    reference: DTMB5415Reference,
+    functions: dict,
+    form_data: DTMB5415FormData,
+) -> None:
+    """Show primary naval variables and component-resolved auxiliary targets."""
+    figure, axes = plt.subplots(2, 2, figsize=(12.0, 7.8))
+    profile, distributions, depths, angles = axes.ravel()
+    parameters = form_data.fit_targets.station_parameters
+    targets = form_data.fit_targets
+
+    for region in DTMB5415Region:
+        _, points = _sample_reference(reference, functions, region, (37, 61))
+        flat = points.reshape((-1, 3))
+        profile.scatter(
+            flat[::5, 0],
+            flat[::5, 2],
+            s=3.0,
+            color=REGION_COLORS[region],
+            alpha=0.55,
+            label=REGION_LABELS[region],
+        )
+    main_patch = reference.patches[DTMB5415Region.MAIN_HULL]
+    aft = float(np.mean(main_patch.coefficients[-1, :, 0]))
+    forward = aft - form_data.primary_parameters.length_between_perpendiculars
+    draft = form_data.primary_parameters.draft
+    profile.plot([forward, aft], [-draft, -draft], color="0.15", linestyle="--")
+    profile.axvline(forward, color="0.35", linewidth=0.9)
+    profile.axvline(aft, color="0.35", linewidth=0.9)
+    profile.text(forward, 0.39, "FP", ha="center", va="bottom")
+    profile.text(aft, 0.39, "AP", ha="center", va="bottom")
+    profile.text(
+        0.5 * (forward + aft),
+        -draft - 0.018,
+        r"canonical moulded draft $T=0.248$ m",
+        ha="center",
+        va="top",
+    )
+    profile.set(xlabel="x [m]", ylabel="z [m]", title="Canonical surface components")
+    profile.set_aspect("equal", adjustable="box")
+    profile.grid(alpha=0.22)
+
+    distributions.plot(
+        parameters,
+        targets.half_breadths,
+        color="#0072b2",
+        marker="o",
+        label="Waterline half-breadth",
+    )
+    distributions.plot(
+        parameters,
+        targets.half_areas,
+        color="#009e73",
+        marker="s",
+        linestyle="--",
+        label="Half-sectional area",
+    )
+    distributions.set(
+        xlabel=r"Longitudinal parameter $v=(x-FP)/L_{PP}$",
+        ylabel=r"Breadth [m] or area [m$^2$]",
+        title="Auxiliary form-function targets",
+    )
+    distributions.grid(alpha=0.22)
+    distributions.legend(frameon=False)
+
+    for region in DTMB5415Region:
+        mask = np.array([value is region for value in form_data.station_regions])
+        depths.scatter(
+            parameters[mask],
+            np.asarray(targets.drafts)[mask],
+            s=38,
+            color=REGION_COLORS[region],
+            label=REGION_LABELS[region],
+        )
+    depths.plot(parameters, targets.drafts, color="0.35", linewidth=1.0)
+    depths.axhline(draft, color="0.15", linestyle="--", label="Moulded draft")
+    depths.set(
+        xlabel=r"Longitudinal parameter $v$",
+        ylabel="Depth below z=0 [m]",
+        title="Dome protrusion is not the moulded draft",
+    )
+    depths.grid(alpha=0.22)
+    depths.legend(frameon=False, fontsize=8)
+
+    angles.plot(
+        parameters,
+        np.degrees(targets.deadrise_angles),
+        marker="o",
+        color="#cc79a7",
+        label="Deadrise from horizontal",
+    )
+    angles.plot(
+        parameters,
+        np.degrees(targets.flare_angles),
+        marker="s",
+        color="#e69f00",
+        label="Flare from vertical",
+    )
+    angles.set(
+        xlabel=r"Longitudinal parameter $v$",
+        ylabel="Angle [deg]",
+        title="Section-shape variables",
+    )
+    angles.grid(alpha=0.22)
+    angles.legend(frameon=False)
+
+    handles, labels = profile.get_legend_handles_labels()
+    figure.legend(handles, labels, loc="lower center", ncol=3, frameon=False)
+    primary = form_data.primary_parameters
+    figure.suptitle(
+        "DTMB 5415 naval-variable extraction\n"
+        rf"hard targets: $L_{{PP}}={primary.length_between_perpendiculars:.3f}$ m, "
+        rf"$B={primary.beam:.3f}$ m, $T={primary.draft:.3f}$ m, "
+        rf"$\nabla={primary.displacement:.3f}$ m$^3$"
+    )
+    figure.subplots_adjust(bottom=0.13, top=0.87, hspace=0.34, wspace=0.24)
+    _save(figure, output)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path)
@@ -428,6 +550,7 @@ def main() -> None:
     ]
     uniform_fine = approximations[-1]
     aligned_fine = fit_dtmb_5415(reference, "fine", knot_strategy="reference_aligned")
+    form_data = extract_dtmb_5415_form_data(reference)
 
     print("DTMB 5415 reference dimensions:", reference.dimensions())
     for approximation in [*approximations, aligned_fine]:
@@ -465,6 +588,12 @@ def main() -> None:
         reference,
         reference_functions,
         aligned_fine,
+    )
+    _plot_naval_parameter_extraction(
+        _derived_output(arguments.output, "naval_parameters"),
+        reference,
+        reference_functions,
+        form_data,
     )
     recorder.stop()
 

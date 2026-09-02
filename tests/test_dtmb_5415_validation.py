@@ -9,9 +9,25 @@ from lsdo_geo.validation import (
     DTMB5415Reference,
     DTMB5415Region,
     PolynomialIGESPatch,
+    extract_dtmb_5415_form_data,
     fit_dtmb_5415,
     read_polynomial_iges_surfaces,
 )
+
+
+def _ruled_section_patch(
+    x_bounds: tuple[float, float], depth: float
+) -> PolynomialIGESPatch:
+    """Return a ruled half-hull face with a resolved waterline crossing."""
+    knots = (np.array([0.0, 0.0, 1.0, 1.0]),) * 2
+    coefficients = np.array([[[x, 0.0, -depth], [x, 0.4, 0.1]] for x in x_bounds])
+    return PolynomialIGESPatch(
+        degree=(1, 1),
+        knots=knots,
+        coefficients=coefficients,
+        parameter_bounds=((0.0, 1.0), (0.0, 1.0)),
+        directory_entry=1,
+    )
 
 
 def _write_bilinear_iges(path: Path) -> Path:
@@ -150,4 +166,37 @@ def test_dtmb_validation_requires_and_reports_sonar_dome_region():
     assert aligned.knot_strategy == "reference_aligned"
     assert aligned.global_rms_error < 1.0e-10
     assert all(fit.fitting_sample_count > 0 for fit in aligned.patches.values())
+    recorder.stop()
+
+
+def test_dtmb_form_data_separates_moulded_draft_from_sonar_dome_depth():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    reference = DTMB5415Reference(
+        patches={
+            DTMB5415Region.SONAR_DOME: _ruled_section_patch((-2.70, -2.01), 0.36),
+            DTMB5415Region.SONAR_DOME_TRANSITION: _ruled_section_patch(
+                (-2.01, -1.84), 0.30
+            ),
+            DTMB5415Region.MAIN_HULL: _ruled_section_patch((-1.84, 3.04), 0.248),
+        },
+        source_path=Path("synthetic_dtmb_5415.igs"),
+    )
+    data = extract_dtmb_5415_form_data(
+        reference,
+        station_parameters=np.array([0.03, 0.10, 0.30, 0.60, 1.0]),
+        integration_station_count=21,
+        search_resolution=21,
+        transverse_resolution=41,
+    )
+
+    assert data.primary_parameters.draft == 0.248
+    assert data.measured_particulars["main_hull_draft_from_sections"] < 0.249
+    assert (
+        data.measured_particulars["maximum_underwater_depth_including_sonar_dome"]
+        > 0.35
+    )
+    assert data.fit_targets.maximum_draft_parameter > 0.14
+    assert data.station_regions[0] is DTMB5415Region.SONAR_DOME
+    assert data.station_regions[-1] is DTMB5415Region.MAIN_HULL
     recorder.stop()
