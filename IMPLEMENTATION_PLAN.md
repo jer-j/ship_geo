@@ -95,9 +95,9 @@ box, an exact Wigley surface, and a transom-ended triangular prism.
 ## Milestone 6: approximation and refinement
 
 Status: exact differentiable curve/surface knot insertion, CSDL offset-table
-fitting, residual-driven span indicators, and DTMB 5415 regional convergence
-validation implemented. The sonar dome, dome transition, and main hull remain
-distinct representation regions.
+fitting, residual-driven span indicators, feature-aligned parameterization,
+and DTMB 5415 regional convergence validation implemented. The sonar dome,
+dome transition, and main hull remain distinct representation regions.
 
 - Fit spline patches to offset tables for validation, not as the primary design
   mechanism.
@@ -106,9 +106,13 @@ distinct representation regions.
   sonar dome, dome-to-hull transition, main hull, and transom termination.
 - Hold representation topology fixed during each gradient-based optimization.
 
-The fine DTMB 5415 approximation currently reaches a global RMS surface error
-of $0.350\ \mathrm{mm}$ and a sonar-dome RMS error of
-$0.233\ \mathrm{mm}$ on the $6.119\ \mathrm{m}$ reference model.
+With the same fine control-net sizes, aligning the knot distribution with the
+reference feature locations reduces the DTMB 5415 global RMS surface error
+from $0.350\ \mathrm{mm}$ to $0.0116\ \mathrm{mm}$ and the maximum error from
+$6.003\ \mathrm{mm}$ to $0.378\ \mathrm{mm}$ on the
+$6.119\ \mathrm{m}$ reference model. The forward bow and sonar-dome face and
+the main hull then reproduce to numerical precision; the remaining error is
+localized to the deliberately reduced dome-transition patch.
 
 ## Milestone 7: downstream geometry
 
