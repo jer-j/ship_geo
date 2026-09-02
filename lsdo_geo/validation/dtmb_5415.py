@@ -7,6 +7,7 @@ import urllib.request
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 import lsdo_function_spaces as lfs
 import numpy as np
@@ -73,6 +74,7 @@ class DTMB5415PatchFit:
     rms_error: float
     maximum_error: float
     sample_count: int
+    fitting_sample_count: int
 
 
 @dataclass
@@ -84,6 +86,7 @@ class DTMB5415Approximation:
     global_rms_error: float
     global_maximum_error: float
     length_normalized_rms_error: float
+    knot_strategy: str = "uniform"
 
     @property
     def sonar_dome(self) -> DTMB5415PatchFit:
@@ -108,6 +111,97 @@ _FIT_LEVELS: dict[str, dict[DTMB5415Region, tuple[int, int]]] = {
         DTMB5415Region.MAIN_HULL: (18, 12),
     },
 }
+
+
+def _reference_aligned_axis_knots(
+    patch: PolynomialIGESPatch,
+    axis: int,
+    target_degree: int,
+    target_count: int,
+) -> np.ndarray:
+    """Construct local knots that retain reference feature locations.
+
+    Interior reference knots are mapped from the active IGES parameter range
+    to ``[0, 1]``. Their continuity is retained when the target degree permits
+    it. If the requested space has more or fewer interior knots, simple knots
+    are inserted in the widest spans or removed to minimize the largest
+    remaining span.
+    """
+    lower, upper = patch.parameter_bounds[axis]
+    local = np.clip((patch.knots[axis] - lower) / (upper - lower), 0.0, 1.0)
+    values, multiplicities = np.unique(np.round(local, decimals=14), return_counts=True)
+    interior: list[float] = []
+    for value, source_multiplicity in zip(values, multiplicities):
+        if value <= 1.0e-12 or value >= 1.0 - 1.0e-12:
+            continue
+        source_continuity = patch.degree[axis] - int(source_multiplicity)
+        target_multiplicity = max(1, target_degree - source_continuity)
+        interior.extend([float(value)] * min(target_multiplicity, target_degree))
+
+    required = target_count - target_degree - 1
+    while len(interior) > required:
+        candidates: list[tuple[float, int]] = []
+        for index, value in enumerate(interior):
+            if interior.count(value) > 1:
+                continue
+            trial = interior[:index] + interior[index + 1 :]
+            unique = np.asarray([0.0, *sorted(set(trial)), 1.0])
+            candidates.append((float(np.max(np.diff(unique))), index))
+        removal_index = min(candidates)[1] if candidates else len(interior) // 2
+        interior.pop(removal_index)
+
+    while len(interior) < required:
+        unique = np.asarray([0.0, *sorted(set(interior)), 1.0])
+        gaps = np.diff(unique)
+        span_index = int(np.argmax(gaps))
+        interior.append(float(0.5 * (unique[span_index] + unique[span_index + 1])))
+
+    return np.concatenate(
+        (
+            np.zeros(target_degree + 1),
+            np.sort(np.asarray(interior)),
+            np.ones(target_degree + 1),
+        )
+    )
+
+
+def _reference_aligned_knots(
+    patch: PolynomialIGESPatch,
+    degree: tuple[int, int],
+    coefficient_shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return reference-feature-aligned knots for both surface axes."""
+    return tuple(
+        _reference_aligned_axis_knots(
+            patch,
+            axis,
+            degree[axis],
+            coefficient_shape[axis],
+        )
+        for axis in range(2)
+    )
+
+
+def _feature_aware_grid(
+    knots: tuple[np.ndarray, np.ndarray],
+    resolution: tuple[int, int],
+    coefficient_shape: tuple[int, int],
+) -> np.ndarray:
+    """Sample every knot span while retaining a uniform validation baseline."""
+    axes: list[np.ndarray] = []
+    for axis in range(2):
+        unique = np.unique(knots[axis])
+        midpoints = 0.5 * (unique[:-1] + unique[1:])
+        uniform_count = max(int(resolution[axis]), 2 * coefficient_shape[axis] + 1)
+        axes.append(
+            np.unique(
+                np.concatenate(
+                    (np.linspace(0.0, 1.0, uniform_count), unique, midpoints)
+                )
+            )
+        )
+    first, second = np.meshgrid(axes[0], axes[1], indexing="ij")
+    return np.column_stack((first.ravel(), second.ravel()))
 
 
 def download_dtmb_5415(destination: str | Path) -> Path:
@@ -153,27 +247,50 @@ def fit_dtmb_5415(
     level: str,
     fitting_resolution: tuple[int, int] = (41, 61),
     evaluation_resolution: tuple[int, int] = (57, 83),
+    knot_strategy: Literal["uniform", "reference_aligned"] = "uniform",
 ) -> DTMB5415Approximation:
-    """Fit all three regions and report global and dome-resolved errors."""
+    """Fit all regions and report global and dome-resolved errors.
+
+    ``reference_aligned`` treats the longitudinal and transverse knot
+    locations as representation variables. It maps feature locations and
+    continuity from the source patch into the fitted space, then samples every
+    resulting knot span. This separates control-net resolution error from the
+    much larger error that can be caused by an unsuitable uniform
+    parameterization.
+    """
     if level not in _FIT_LEVELS:
         raise ValueError(f"unknown DTMB 5415 fit level {level!r}.")
+    if knot_strategy not in ("uniform", "reference_aligned"):
+        raise ValueError(f"unknown knot strategy {knot_strategy!r}.")
     functions = reference.build_functions()
     fits: dict[DTMB5415Region, DTMB5415PatchFit] = {}
     all_squared_errors: list[np.ndarray] = []
     all_errors: list[np.ndarray] = []
     all_reference_points: list[np.ndarray] = []
     for region, patch in reference.patches.items():
-        fit_coordinates, fit_values = patch.sample_grid(
-            functions[region], fitting_resolution
-        )
         coefficient_shape = _FIT_LEVELS[level][region]
         degree = tuple(min(3, count - 1) for count in coefficient_shape)
+        knots = None
+        if knot_strategy == "reference_aligned":
+            axis_knots = _reference_aligned_knots(patch, degree, coefficient_shape)
+            fit_coordinates = _feature_aware_grid(
+                axis_knots, fitting_resolution, coefficient_shape
+            )
+            fit_values = patch.evaluate(functions[region], fit_coordinates)
+            knots = np.concatenate(axis_knots)
+        else:
+            fit_coordinates, fit_values = patch.sample_grid(
+                functions[region], fitting_resolution
+            )
         surface = fit_offset_surface(
             fit_values,
             fit_coordinates,
             degree=degree,
             coefficients_shape=coefficient_shape,
-            regularization=1.0e-12,
+            knots=knots,
+            regularization=(
+                1.0e-14 if knot_strategy == "reference_aligned" else 1.0e-12
+            ),
             name=f"dtmb_5415_{region.value}_{level}",
         )
         evaluation_coordinates, reference_values = patch.sample_grid(
@@ -189,6 +306,7 @@ def fit_dtmb_5415(
             rms_error=float(np.sqrt(np.mean(errors**2))),
             maximum_error=float(np.max(errors)),
             sample_count=errors.size,
+            fitting_sample_count=fit_coordinates.shape[0],
         )
         all_squared_errors.append(errors**2)
         all_errors.append(errors)
@@ -204,4 +322,5 @@ def fit_dtmb_5415(
         global_rms_error=global_rms,
         global_maximum_error=float(np.max(errors)),
         length_normalized_rms_error=global_rms / length,
+        knot_strategy=knot_strategy,
     )

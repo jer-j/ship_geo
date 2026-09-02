@@ -139,4 +139,15 @@ def test_dtmb_validation_requires_and_reports_sonar_dome_region():
     assert set(approximation.patches) == set(DTMB5415Region)
     assert approximation.global_rms_error < 1.0e-10
     assert approximation.sonar_dome.rms_error < 1.0e-10
+
+    aligned = fit_dtmb_5415(
+        reference,
+        "fine",
+        fitting_resolution=(9, 11),
+        evaluation_resolution=(11, 13),
+        knot_strategy="reference_aligned",
+    )
+    assert aligned.knot_strategy == "reference_aligned"
+    assert aligned.global_rms_error < 1.0e-10
+    assert all(fit.fitting_sample_count > 0 for fit in aligned.patches.values())
     recorder.stop()
