@@ -1,13 +1,16 @@
 """Analytic and coupled verification for first-principles ship geometry."""
 
 import csdl_alpha as csdl
+import lsdo_function_spaces as lfs
 import numpy as np
 
 from lsdo_geo import (
     ClosedSurface,
+    CompatibleLoft,
     FormCurveKind,
     FormCurveProblem,
     FormParameterHullProblem,
+    FSplineCurve,
     LongitudinalFitTargets,
     NavalHullParameters,
     SectionLoftProblem,
@@ -29,6 +32,42 @@ from lsdo_geo import (
     tessellate_closed_surface,
     wigley_surface,
 )
+
+
+def test_compatible_loft_interpolates_nonuniform_section_stations():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    stations = np.array([0.0, 0.05, 0.12, 0.30, 0.70, 1.0])
+    space = lfs.BSplineSpace(
+        num_parametric_dimensions=1,
+        degree=(3,),
+        coefficients_shape=(4,),
+    )
+    sections = []
+    for index, station in enumerate(stations):
+        coefficients = np.column_stack(
+            (
+                np.linspace(-1.0, 0.0, 4),
+                (1.0 + station**2) * np.linspace(0.0, 1.0, 4),
+            )
+        )
+        sections.append(
+            FSplineCurve(
+                lfs.Function(
+                    space,
+                    csdl.Variable(value=coefficients),
+                    name=f"nonuniform_section_{index}",
+                )
+            )
+        )
+    surface = CompatibleLoft.create(sections, stations, stations)
+    transverse = np.linspace(0.0, 1.0, 9)
+    for section, station in zip(sections, stations):
+        coordinates = np.column_stack((transverse, np.full(transverse.size, station)))
+        surface_values = np.asarray(surface.evaluate(coordinates).value)
+        section_values = np.asarray(section.evaluate(transverse).value)
+        np.testing.assert_allclose(surface_values[:, 1:], section_values[:, [1, 0]])
+    recorder.stop()
 
 
 def test_form_parameter_hull_preserves_primary_naval_parameters():
@@ -80,6 +119,37 @@ def test_form_parameter_hull_preserves_primary_naval_parameters():
         np.max(np.abs(geometry.hull.variational_result.constraint_residual.value))
         < 1e-10
     )
+    recorder.stop()
+
+
+def test_section_shape_fit_preserves_exact_form_constraints():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    parameters = np.linspace(0.0, 1.0, 11)
+    target = np.column_stack(
+        (-1.0 + parameters, 0.5 * parameters + 0.5 * parameters**2)
+    )
+    system = VariationalSystem("section_shape_fit")
+    problem = SectionProblem(
+        station_parameter=0.5,
+        draft=1.0,
+        half_breadth=1.0,
+        half_area=5.0 / 12.0,
+        keel_tangent_angle=np.arctan(0.5),
+        waterline_tangent_angle=np.arctan(1.5),
+        num_control_points=6,
+        fairness_weights={2: 1.0e-4},
+        fit_parameters=parameters,
+        fit_points=target,
+        fit_weight=100.0,
+    )
+    assembly = problem.assemble(system)
+    curve = assembly.finalize(system.solve(max_iter=20))
+    residual = np.asarray(curve.evaluate(parameters).value) - target
+
+    assert np.sqrt(np.mean(np.sum(residual**2, axis=1))) < 4.0e-6
+    assert np.max(np.abs(curve.constraint_residual.value)) < 2.0e-12
+    assert np.max(np.abs(curve.stationarity_residual.value)) < 2.0e-11
     recorder.stop()
 
 

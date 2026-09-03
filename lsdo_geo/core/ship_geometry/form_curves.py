@@ -139,18 +139,24 @@ class FormCurveAssembly:
 
     curve: FormCurve
     state_index: int
-    constraint_handle: ConstraintHandle
+    constraint_handle: ConstraintHandle | None
 
     def finalize(self, result: VariationalResult) -> FormCurve:
         """Attach diagnostics from the global KKT solution."""
         self.curve.stationarity_residual = result.stationarity_residuals[
             self.state_index
         ]
-        if result.constraint_residual is not None:
+        if (
+            result.constraint_residual is not None
+            and self.constraint_handle is not None
+        ):
             self.curve.constraint_residual = result.constraint_residual[
                 self.constraint_handle.start : self.constraint_handle.stop
             ]
-        if result.lagrange_multipliers is not None:
+        if (
+            result.lagrange_multipliers is not None
+            and self.constraint_handle is not None
+        ):
             self.curve.lagrange_multipliers = result.lagrange_multipliers[
                 self.constraint_handle.start : self.constraint_handle.stop
             ]
@@ -258,8 +264,6 @@ class FormCurveProblem:
         initial_coefficients: npt.ArrayLike | None = None,
     ) -> FormCurveAssembly:
         """Add this distribution to a shared KKT system."""
-        if not self.constraints:
-            raise ValueError("at least one form constraint is required.")
         coefficients = csdl.ImplicitVariable(
             value=self._initial_coefficients(initial_coefficients),
             name=f"{self.name}_coefficients",
@@ -286,14 +290,18 @@ class FormCurveProblem:
             else:
                 value = curve.integral(constraint.moment_order).reshape((1,))
             residuals.append(scale * (value - constraint.target))
-        residual = (
-            residuals[0] if len(residuals) == 1 else csdl.concatenate(tuple(residuals))
-        )
         curve.fairness_objective = objective
-        curve.constraint_residual = residual
         state_index = system.add_state(coefficients, name=self.name)
         system.add_objective(objective)
-        handle = system.add_constraint(residual)
+        handle = None
+        if residuals:
+            residual = (
+                residuals[0]
+                if len(residuals) == 1
+                else csdl.concatenate(tuple(residuals))
+            )
+            curve.constraint_residual = residual
+            handle = system.add_constraint(residual)
         return FormCurveAssembly(curve, state_index, handle)
 
     def solve(

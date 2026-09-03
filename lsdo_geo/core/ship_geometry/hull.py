@@ -131,6 +131,9 @@ class SectionLoftProblem:
         surface_constraint_scale: float = 1.0,
         pointed_ends: bool | tuple[bool, bool] = True,
         x_origin: Any = 0.0,
+        section_fit_parameters: npt.ArrayLike | None = None,
+        section_fit_points: Any | None = None,
+        section_fit_weight: float = 0.0,
         name: str = "hull_geometry",
     ) -> None:
         parameters = np.asarray(station_parameters, dtype=float).reshape(-1)
@@ -199,6 +202,36 @@ class SectionLoftProblem:
         self.surface_constraint_scale = float(surface_constraint_scale)
         self.pointed_ends = (pointed_bow, pointed_stern)
         self.x_origin = x_origin
+        if (section_fit_parameters is None) != (section_fit_points is None):
+            raise ValueError(
+                "section_fit_parameters and section_fit_points must be supplied "
+                "together."
+            )
+        self.section_fit_parameters = (
+            None
+            if section_fit_parameters is None
+            else np.asarray(section_fit_parameters, dtype=float).reshape(-1)
+        )
+        self.section_fit_points = section_fit_points
+        self.section_fit_weight = float(section_fit_weight)
+        if self.section_fit_weight < 0.0:
+            raise ValueError("section_fit_weight must be nonnegative.")
+        if self.section_fit_parameters is not None:
+            shape = (
+                section_fit_points.shape
+                if isinstance(section_fit_points, csdl.Variable)
+                else np.shape(section_fit_points)
+            )
+            expected = (
+                parameters.size,
+                self.section_fit_parameters.size,
+                2,
+            )
+            if tuple(shape) != expected:
+                raise ValueError(
+                    "section_fit_points must have shape "
+                    "(num_sections, num_fit_parameters, 2)."
+                )
         self.name = name
 
     def solve(
@@ -235,6 +268,13 @@ class SectionLoftProblem:
                 num_control_points=self.num_section_control_points,
                 degree=self.section_degree,
                 fairness_weights=self.section_fairness_weights,
+                fit_parameters=self.section_fit_parameters,
+                fit_points=(
+                    None
+                    if self.section_fit_points is None
+                    else self.section_fit_points[index]
+                ),
+                fit_weight=self.section_fit_weight,
                 name=f"{self.name}_section_{index}",
             )
             assemblies.append(problem.assemble(system))

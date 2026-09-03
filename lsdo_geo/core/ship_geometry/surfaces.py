@@ -33,6 +33,17 @@ def _composite_rule(
     return np.concatenate(points), np.concatenate(weights)
 
 
+def _averaged_interpolation_knots(parameters: np.ndarray, degree: int) -> np.ndarray:
+    """Return the standard parameter-averaged knots for global interpolation."""
+    interior = [
+        float(np.mean(parameters[index : index + degree]))
+        for index in range(1, parameters.size - degree)
+    ]
+    return np.concatenate(
+        (np.zeros(degree + 1), np.asarray(interior), np.ones(degree + 1))
+    )
+
+
 @dataclass
 class TensorProductSurface:
     """A three-dimensional tensor-product B-spline surface."""
@@ -175,15 +186,14 @@ class CompatibleLoft:
             raise ValueError(
                 "longitudinal_num_control_points must exceed longitudinal_degree."
             )
+        knot_values = longitudinal_knots
+        if knot_values is None and num_longitudinal == len(sections):
+            knot_values = _averaged_interpolation_knots(parameters, longitudinal_degree)
         longitudinal_space = lfs.BSplineSpace(
             num_parametric_dimensions=1,
             degree=(longitudinal_degree,),
             coefficients_shape=(num_longitudinal,),
-            knots=(
-                None
-                if longitudinal_knots is None
-                else np.asarray(longitudinal_knots, dtype=float)
-            ),
+            knots=None if knot_values is None else np.asarray(knot_values, dtype=float),
         )
         basis = longitudinal_space.compute_basis_matrix(parameters[:, None]).toarray()
         if basis.shape[0] == basis.shape[1]:

@@ -127,8 +127,11 @@ export remain deferred.
 
 ## Milestone 8: naval form-parameter inverse design
 
-Status: primary form-parameter hierarchy and auxiliary-function fitting kernel
-implemented. DTMB 5415 extraction and surface-level calibration are next.
+Status: primary form-parameter hierarchy, auxiliary-function fitting,
+surface-level DTMB 5415 calibration, and independent-station validation are
+implemented. The primary variables remain exact to $2.85\times10^{-16}$; the
+current single-patch surface reaches $15.16\ \mathrm{mm}$ RMS on independent
+sections and establishes the baseline for component-wise refinement.
 
 - Expose $L_{PP}$, $B$, $T$, $\nabla$, $x_{LCB}$, and $C_{WP}$ as primary
   CSDL inputs constrained exactly on the curves of form.
@@ -139,6 +142,22 @@ implemented. DTMB 5415 extraction and surface-level calibration are next.
   geometry, including its separate sonar-dome component.
 - Calibrate auxiliary variables against surface offsets and report both
   surface error and errors in every primary naval parameter.
+
+## Milestone 9: component-wise naval parameterization
+
+Status: next.
+
+- Split the first-principles longitudinal representation into the forward
+  sonar-dome/bow, dome transition, and main-hull regions identified by the
+  canonical topology.
+- Retain naval variables as the public design interface and expose only the
+  additional regional shape controls needed to recover local fullness.
+- Couple regional curves and surfaces through shared-boundary position and
+  tangent constraints in one `VariationalSystem` and one Newton solve.
+- Fit auxiliary regional variables while keeping $L_{PP}$, $B$, $T$, $\nabla$,
+  LCB, and $C_{WP}$ exact.
+- Re-run the same fit-station and independent-station comparisons so every
+  increase in representation complexity has a quantified benefit.
 
 ## Verification policy
 

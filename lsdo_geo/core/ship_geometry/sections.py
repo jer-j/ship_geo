@@ -121,6 +121,9 @@ class SectionProblem:
         degree: int = 3,
         fairness_weights: dict[int, float] | None = None,
         quadrature_order: int = 8,
+        fit_parameters: Any | None = None,
+        fit_points: Any | None = None,
+        fit_weight: float = 0.0,
         name: str | None = None,
     ) -> None:
         if not 0.0 <= float(station_parameter) <= 1.0:
@@ -128,6 +131,32 @@ class SectionProblem:
         self.station_parameter = float(station_parameter)
         self.template = SectionTemplate(template)
         self.name = name or f"section_{station_parameter:.4f}"
+        self.draft = draft
+        self.half_breadth = half_breadth
+        if (fit_parameters is None) != (fit_points is None):
+            raise ValueError("fit_parameters and fit_points must be supplied together.")
+        if fit_weight < 0.0:
+            raise ValueError("fit_weight must be nonnegative.")
+        self.fit_parameters = None
+        self.fit_points = fit_points
+        self.fit_weight = float(fit_weight)
+        if fit_parameters is not None:
+            parameters = np.asarray(fit_parameters, dtype=float).reshape(-1)
+            if (
+                parameters.size < 2
+                or np.any(np.diff(parameters) <= 0.0)
+                or parameters[0] < 0.0
+                or parameters[-1] > 1.0
+            ):
+                raise ValueError("fit_parameters must increase inside [0, 1].")
+            shape = (
+                fit_points.shape
+                if isinstance(fit_points, csdl.Variable)
+                else np.shape(fit_points)
+            )
+            if tuple(shape) != (parameters.size, 2):
+                raise ValueError("fit_points must have shape (num_fit_parameters, 2).")
+            self.fit_parameters = parameters
         knots = None
         if self.template is SectionTemplate.HARD_CHINE:
             if chine_point is None:
@@ -160,11 +189,32 @@ class SectionProblem:
         initial_control_points: np.ndarray | None = None,
     ) -> SectionAssembly:
         """Add the section to a shared KKT system without solving it."""
-        return SectionAssembly(
+        if initial_control_points is None and self.fit_parameters is not None:
+            target_values = (
+                np.asarray(self.fit_points.value, dtype=float)
+                if isinstance(self.fit_points, csdl.Variable)
+                else np.asarray(self.fit_points, dtype=float)
+            )
+            basis = self.problem.space.compute_basis_matrix(
+                self.fit_parameters[:, None]
+            ).toarray()
+            initial_control_points = np.linalg.lstsq(basis, target_values, rcond=None)[
+                0
+            ]
+        assembly = SectionAssembly(
             station_parameter=self.station_parameter,
             fspline=self.problem.assemble(system, initial_control_points),
             template=self.template,
         )
+        if self.fit_parameters is not None and self.fit_weight:
+            values = assembly.curve.evaluate(self.fit_parameters)
+            target = self.fit_points
+            z_residual = (values[:, 0] - target[:, 0]) / self.draft
+            y_residual = (values[:, 1] - target[:, 1]) / self.half_breadth
+            system.add_objective(
+                self.fit_weight * (csdl.sum(z_residual**2) + csdl.sum(y_residual**2))
+            )
+        return assembly
 
 
 def collapsed_section(

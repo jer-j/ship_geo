@@ -147,6 +147,7 @@ class FormParameterHullGeometry:
         beam = self.primary_parameters.beam
         area_integral = self.sectional_area_curve.integral()
         return {
+            "length_between_perpendiculars": 0.0 * area_integral + length,
             "beam": 2.0 * self.waterline_curve.evaluate(self.maximum_beam_parameter),
             "draft": self.draft_curve.evaluate(self.maximum_draft_parameter),
             "displacement": 2.0 * length * area_integral,
@@ -203,15 +204,21 @@ class FormParameterHullProblem:
         fit_targets: LongitudinalFitTargets,
         num_form_control_points: int = 10,
         num_section_control_points: int = 8,
+        section_station_parameters: npt.ArrayLike | None = None,
+        section_fit_parameters: npt.ArrayLike | None = None,
+        section_fit_points: Any | None = None,
+        section_fit_weight: float = 0.0,
         form_fit_weight: float = 1.0,
         form_fairness_weight: float = 1.0e-4,
+        x_origin: Any = 0.0,
         name: str = "form_parameter_hull",
     ) -> None:
         primary_parameters.validate_current_values()
         targets = fit_targets.validated()
-        if num_form_control_points < targets.station_parameters.size + 1:
+        if num_form_control_points < 6:
             raise ValueError(
-                "num_form_control_points must exceed the auxiliary station count."
+                "num_form_control_points must be at least six to support the "
+                "waterline form constraints."
             )
         if form_fit_weight <= 0.0 or form_fairness_weight <= 0.0:
             raise ValueError("form fitting and fairness weights must be positive.")
@@ -219,8 +226,24 @@ class FormParameterHullProblem:
         self.targets = targets
         self.num_form_control_points = int(num_form_control_points)
         self.num_section_control_points = int(num_section_control_points)
+        section_stations = (
+            targets.station_parameters
+            if section_station_parameters is None
+            else np.asarray(section_station_parameters, dtype=float).reshape(-1)
+        )
+        if (
+            section_stations.size < 2
+            or np.any(np.diff(section_stations) <= 0.0)
+            or np.any((section_stations <= 0.0) | (section_stations > 1.0))
+        ):
+            raise ValueError("section_station_parameters must increase inside (0, 1].")
+        self.section_station_parameters = section_stations
+        self.section_fit_parameters = section_fit_parameters
+        self.section_fit_points = section_fit_points
+        self.section_fit_weight = float(section_fit_weight)
         self.form_fit_weight = float(form_fit_weight)
         self.form_fairness_weight = float(form_fairness_weight)
+        self.x_origin = x_origin
         self.name = name
 
     def solve(
@@ -243,7 +266,8 @@ class FormParameterHullProblem:
         displacement = self.primary.displacement
         lcb = self.primary.lcb
         cwp = self.primary.waterplane_coefficient
-        stations = np.asarray(self.targets.station_parameters)
+        fit_stations = np.asarray(self.targets.station_parameters)
+        section_stations = self.section_station_parameters
         mean_volume_parameter = 0.5 + lcb / length
         problems: dict[FormCurveKind, FormCurveProblem] = {}
         area_problem = self._problem(FormCurveKind.SECTIONAL_AREA)
@@ -276,14 +300,8 @@ class FormParameterHullProblem:
         draft_problem.add_value_constraint(1.0, self.targets.drafts[-1])
         problems[FormCurveKind.KEEL_PROFILE] = draft_problem
 
-        for kind, values in (
-            (FormCurveKind.DEADRISE, self.targets.deadrise_angles),
-            (FormCurveKind.FLARE, self.targets.flare_angles),
-        ):
-            problem = self._problem(kind)
-            for station_index, station in enumerate(stations):
-                problem.add_value_constraint(station, values[station_index])
-            problems[kind] = problem
+        for kind in (FormCurveKind.DEADRISE, FormCurveKind.FLARE):
+            problems[kind] = self._problem(kind)
 
         target_map = {
             FormCurveKind.SECTIONAL_AREA: self.targets.half_areas,
@@ -297,7 +315,7 @@ class FormParameterHullProblem:
                 system,
                 self._initial_form_coefficients(
                     problem,
-                    stations,
+                    fit_stations,
                     target_map[kind],
                     zero_at_bow=kind
                     in (
@@ -318,7 +336,7 @@ class FormParameterHullProblem:
         }
         for kind, assembly in assemblies.items():
             residual = scales[kind] * (
-                assembly.curve.evaluate(stations).reshape((stations.size,))
+                assembly.curve.evaluate(fit_stations).reshape((fit_stations.size,))
                 - target_map[kind]
             )
             system.add_objective(self.form_fit_weight * csdl.sum(residual**2))
@@ -326,27 +344,31 @@ class FormParameterHullProblem:
         curves = {kind: assembly.curve for kind, assembly in assemblies.items()}
         section_problem = SectionLoftProblem(
             length=length,
-            station_parameters=stations,
+            station_parameters=section_stations,
             drafts=curves[FormCurveKind.KEEL_PROFILE]
-            .evaluate(stations)
-            .reshape((stations.size,)),
+            .evaluate(section_stations)
+            .reshape((section_stations.size,)),
             half_breadths=curves[FormCurveKind.WATERLINE_HALF_BREADTH]
-            .evaluate(stations)
-            .reshape((stations.size,)),
+            .evaluate(section_stations)
+            .reshape((section_stations.size,)),
             half_areas=curves[FormCurveKind.SECTIONAL_AREA]
-            .evaluate(stations)
-            .reshape((stations.size,)),
+            .evaluate(section_stations)
+            .reshape((section_stations.size,)),
             keel_tangent_angles=(
                 0.5 * np.pi
                 - curves[FormCurveKind.DEADRISE]
-                .evaluate(stations)
-                .reshape((stations.size,))
+                .evaluate(section_stations)
+                .reshape((section_stations.size,))
             ),
             waterline_tangent_angles=curves[FormCurveKind.FLARE]
-            .evaluate(stations)
-            .reshape((stations.size,)),
+            .evaluate(section_stations)
+            .reshape((section_stations.size,)),
             num_section_control_points=self.num_section_control_points,
-            pointed_ends=(True, stations[-1] < 1.0),
+            pointed_ends=(True, section_stations[-1] < 1.0),
+            x_origin=self.x_origin,
+            section_fit_parameters=self.section_fit_parameters,
+            section_fit_points=self.section_fit_points,
+            section_fit_weight=self.section_fit_weight,
             name=self.name,
         )
         section_assembly = section_problem.assemble(system)

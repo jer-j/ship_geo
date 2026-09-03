@@ -430,7 +430,12 @@ def _plot_naval_parameter_extraction(
             label=REGION_LABELS[region],
         )
     main_patch = reference.patches[DTMB5415Region.MAIN_HULL]
-    aft = float(np.mean(main_patch.coefficients[-1, :, 0]))
+    edge_parameters = np.linspace(0.0, 1.0, 101)
+    aft_edge = main_patch.evaluate(
+        functions[DTMB5415Region.MAIN_HULL],
+        np.column_stack((np.ones_like(edge_parameters), edge_parameters)),
+    )
+    aft = float(np.mean(np.asarray(aft_edge.value)[:, 0]))
     forward = aft - form_data.primary_parameters.length_between_perpendiculars
     draft = form_data.primary_parameters.draft
     profile.plot([forward, aft], [-draft, -draft], color="0.15", linestyle="--")

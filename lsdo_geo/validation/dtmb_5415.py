@@ -14,6 +14,8 @@ import numpy as np
 import numpy.typing as npt
 
 from ..core.ship_geometry.form_parameter_hull import (
+    FormParameterHullGeometry,
+    FormParameterHullProblem,
     LongitudinalFitTargets,
     NavalHullParameters,
 )
@@ -115,6 +117,35 @@ class DTMB5415FormData:
     measured_particulars: dict[str, float]
     longitudinal_coordinates: np.ndarray
     station_regions: tuple[DTMB5415Region, ...]
+    coordinate_origin: float
+
+
+@dataclass(frozen=True)
+class DTMB5415SectionFitData:
+    """Arc-length-parameterized underwater sections used as auxiliary targets."""
+
+    station_parameters: np.ndarray
+    curve_parameters: np.ndarray
+    points: np.ndarray
+    longitudinal_coordinates: np.ndarray
+    station_regions: tuple[DTMB5415Region, ...]
+
+
+@dataclass
+class DTMB5415FormCalibration:
+    """Solved first-principles hull and its DTMB 5415 calibration diagnostics."""
+
+    geometry: FormParameterHullGeometry
+    form_data: DTMB5415FormData
+    section_fit_data: DTMB5415SectionFitData
+    primary_parameter_errors: dict[str, float]
+    auxiliary_rms_errors: dict[str, float]
+    fitting_section_rms_error: float
+    fitting_section_maximum_error: float
+    validation_section_data: DTMB5415SectionFitData
+    validation_station_rms_errors: np.ndarray
+    validation_section_rms_error: float
+    validation_section_maximum_error: float
 
 
 _FIT_LEVELS: dict[str, dict[DTMB5415Region, tuple[int, int]]] = {
@@ -307,6 +338,17 @@ def _constant_x_section(
 
 def _underwater_section_properties(points: np.ndarray) -> tuple[float, ...]:
     """Measure waterline breadth, draft, area, deadrise, and flare."""
+    underwater = _underwater_section_curve(points)
+    z = underwater[:, 2]
+    y = underwater[:, 1]
+    half_area = abs(float(np.trapz(y, z)))
+    deadrise = float(np.arctan2(z[1] - z[0], y[1] - y[0]))
+    flare = float(np.arctan2(y[-1] - y[-2], z[-1] - z[-2]))
+    return float(y[-1]), float(-np.min(z)), half_area, deadrise, flare
+
+
+def _underwater_section_curve(points: np.ndarray) -> np.ndarray:
+    """Return a keel-to-waterline polyline with an interpolated z=0 endpoint."""
     ordered = points[np.argsort(points[:, 2])]
     submerged = ordered[ordered[:, 2] <= 0.0]
     emerged = ordered[ordered[:, 2] > 0.0]
@@ -316,13 +358,7 @@ def _underwater_section_properties(points: np.ndarray) -> tuple[float, ...]:
     upper = emerged[0]
     fraction = -lower[2] / (upper[2] - lower[2])
     waterline = lower + fraction * (upper - lower)
-    underwater = np.vstack((submerged, waterline))
-    z = underwater[:, 2]
-    y = underwater[:, 1]
-    half_area = abs(float(np.trapz(y, z)))
-    deadrise = float(np.arctan2(z[1] - z[0], y[1] - y[0]))
-    flare = float(np.arctan2(y[-1] - y[-2], z[-1] - z[-2]))
-    return float(y[-1]), float(-np.min(z)), half_area, deadrise, flare
+    return np.vstack((submerged, waterline))
 
 
 def extract_dtmb_5415_form_data(
@@ -457,6 +493,210 @@ def extract_dtmb_5415_form_data(
         },
         longitudinal_coordinates=requested_coordinates,
         station_regions=tuple(region_at(x) for x in requested_coordinates),
+        coordinate_origin=0.5 * (forward_perpendicular + aft_perpendicular),
+    )
+
+
+def extract_dtmb_5415_section_fit_data(
+    reference: DTMB5415Reference,
+    station_parameters: npt.ArrayLike,
+    num_curve_points: int = 17,
+    search_resolution: int = 121,
+    transverse_resolution: int = 301,
+) -> DTMB5415SectionFitData:
+    """Extract component-resolved auxiliary body-plan targets.
+
+    Each exact underwater section is resampled at common normalized arc-length
+    coordinates. The returned point ordering is ``(z, y)`` to match the
+    F-Spline section convention. These observations are fitting objectives, not
+    equality constraints, so the primary naval variables remain authoritative.
+    """
+    stations = np.asarray(station_parameters, dtype=float).reshape(-1)
+    if (
+        stations.size < 2
+        or np.any(np.diff(stations) <= 0.0)
+        or np.any((stations <= 0.0) | (stations > 1.0))
+    ):
+        raise ValueError("station_parameters must increase inside (0, 1].")
+    if num_curve_points < 5:
+        raise ValueError("num_curve_points must be at least five.")
+
+    functions = reference.build_functions()
+    length = 5.719
+    main_patch = reference.patches[DTMB5415Region.MAIN_HULL]
+    main_function = functions[DTMB5415Region.MAIN_HULL]
+    aft_edge = main_patch.evaluate(
+        main_function,
+        np.column_stack((np.ones(101), np.linspace(0.0, 1.0, 101))),
+    )
+    aft_perpendicular = float(np.mean(np.asarray(aft_edge.value)[:, 0]))
+    forward_perpendicular = aft_perpendicular - length
+    transition = reference.patches[DTMB5415Region.SONAR_DOME_TRANSITION]
+    transition_bounds = (
+        float(np.min(transition.coefficients[:, :, 0])),
+        float(np.max(transition.coefficients[:, :, 0])),
+    )
+
+    def region_at(x_coordinate: float) -> DTMB5415Region:
+        if x_coordinate < transition_bounds[0]:
+            return DTMB5415Region.SONAR_DOME
+        if x_coordinate < transition_bounds[1]:
+            return DTMB5415Region.SONAR_DOME_TRANSITION
+        return DTMB5415Region.MAIN_HULL
+
+    curve_parameters = np.linspace(0.0, 1.0, num_curve_points)
+    coordinates = forward_perpendicular + length * stations
+    targets = np.zeros((stations.size, num_curve_points, 2))
+    regions: list[DTMB5415Region] = []
+    for index, x_coordinate in enumerate(coordinates):
+        region = region_at(float(x_coordinate))
+        regions.append(region)
+        section = _underwater_section_curve(
+            _constant_x_section(
+                reference.patches[region],
+                functions[region],
+                float(x_coordinate),
+                search_resolution,
+                transverse_resolution,
+            )
+        )
+        points = section[:, [2, 1]]
+        lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
+        cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+        cumulative /= cumulative[-1]
+        targets[index, :, 0] = np.interp(curve_parameters, cumulative, points[:, 0])
+        targets[index, :, 1] = np.interp(curve_parameters, cumulative, points[:, 1])
+    return DTMB5415SectionFitData(
+        station_parameters=stations,
+        curve_parameters=curve_parameters,
+        points=targets,
+        longitudinal_coordinates=coordinates,
+        station_regions=tuple(regions),
+    )
+
+
+def calibrate_dtmb_5415_form_hull(
+    reference: DTMB5415Reference,
+    section_station_parameters: npt.ArrayLike = (
+        0.04,
+        0.08,
+        0.12,
+        0.18,
+        0.28,
+        0.42,
+        0.58,
+        0.75,
+        0.90,
+        1.0,
+    ),
+    num_form_control_points: int = 10,
+    num_section_control_points: int = 8,
+    form_fit_weight: float = 100.0,
+    section_fit_weight: float = 250.0,
+    validation_station_parameters: npt.ArrayLike = (
+        0.03,
+        0.06,
+        0.10,
+        0.15,
+        0.23,
+        0.35,
+        0.50,
+        0.67,
+        0.83,
+        0.95,
+    ),
+    tolerance: float = 1.0e-10,
+    max_iter: int = 50,
+    print_status: bool = False,
+) -> DTMB5415FormCalibration:
+    """Calibrate a naval-variable hull while preserving primary particulars."""
+    form_data = extract_dtmb_5415_form_data(reference)
+    section_data = extract_dtmb_5415_section_fit_data(
+        reference, section_station_parameters
+    )
+    geometry = FormParameterHullProblem(
+        form_data.primary_parameters,
+        form_data.fit_targets,
+        num_form_control_points=num_form_control_points,
+        num_section_control_points=num_section_control_points,
+        section_station_parameters=section_data.station_parameters,
+        section_fit_parameters=section_data.curve_parameters,
+        section_fit_points=section_data.points,
+        section_fit_weight=section_fit_weight,
+        form_fit_weight=form_fit_weight,
+        x_origin=form_data.coordinate_origin,
+        name="dtmb_5415_form_calibration",
+    ).solve(tolerance=tolerance, max_iter=max_iter, print_status=print_status)
+
+    recovered = geometry.recovered_primary_parameters()
+    primary_targets = {
+        "length_between_perpendiculars": (
+            form_data.primary_parameters.length_between_perpendiculars
+        ),
+        "beam": form_data.primary_parameters.beam,
+        "draft": form_data.primary_parameters.draft,
+        "displacement": form_data.primary_parameters.displacement,
+        "lcb": form_data.primary_parameters.lcb,
+        "waterplane_coefficient": (form_data.primary_parameters.waterplane_coefficient),
+    }
+    primary_errors = {
+        name: float(
+            np.asarray(value.value).reshape(-1)[0] - float(primary_targets[name])
+        )
+        for name, value in recovered.items()
+    }
+    fit_stations = form_data.fit_targets.station_parameters
+    curve_targets = {
+        "half_sectional_area": (
+            geometry.sectional_area_curve,
+            form_data.fit_targets.half_areas,
+        ),
+        "waterline_half_breadth": (
+            geometry.waterline_curve,
+            form_data.fit_targets.half_breadths,
+        ),
+        "draft": (geometry.draft_curve, form_data.fit_targets.drafts),
+        "deadrise": (geometry.deadrise_curve, form_data.fit_targets.deadrise_angles),
+        "flare": (geometry.flare_curve, form_data.fit_targets.flare_angles),
+    }
+    auxiliary_errors = {}
+    for name, (curve, targets) in curve_targets.items():
+        residual = np.asarray(curve.evaluate(fit_stations).value).reshape(-1) - targets
+        auxiliary_errors[name] = float(np.sqrt(np.mean(residual**2)))
+
+    def section_errors(data: DTMB5415SectionFitData) -> np.ndarray:
+        surface_points = []
+        for station in data.station_parameters:
+            parameters = np.column_stack(
+                (
+                    data.curve_parameters,
+                    np.full(data.curve_parameters.size, station),
+                )
+            )
+            values = np.asarray(geometry.hull.surface.evaluate(parameters).value)
+            surface_points.append(values[:, [2, 1]])
+        residual = np.asarray(surface_points) - data.points
+        return np.linalg.norm(residual, axis=2)
+
+    fitting_distances = section_errors(section_data)
+    validation_data = extract_dtmb_5415_section_fit_data(
+        reference,
+        validation_station_parameters,
+        num_curve_points=section_data.curve_parameters.size,
+    )
+    validation_distances = section_errors(validation_data)
+    return DTMB5415FormCalibration(
+        geometry=geometry,
+        form_data=form_data,
+        section_fit_data=section_data,
+        primary_parameter_errors=primary_errors,
+        auxiliary_rms_errors=auxiliary_errors,
+        fitting_section_rms_error=float(np.sqrt(np.mean(fitting_distances**2))),
+        fitting_section_maximum_error=float(np.max(fitting_distances)),
+        validation_section_data=validation_data,
+        validation_station_rms_errors=np.sqrt(np.mean(validation_distances**2, axis=1)),
+        validation_section_rms_error=float(np.sqrt(np.mean(validation_distances**2))),
+        validation_section_maximum_error=float(np.max(validation_distances)),
     )
 
 
