@@ -40,6 +40,11 @@ def _sequence_values(values: Any, count: int, name: str) -> Any:
     if isinstance(values, csdl.Variable):
         if values.size != count:
             raise ValueError(f"{name} must contain {count} values.")
+        # Reshaping is an operation, and an operation's result carries no value
+        # under a deferred recorder. Keeping an already-correct shape preserves
+        # the numeric values that initial guesses interpolate from.
+        if tuple(values.shape) == (count,):
+            return values
         return values.reshape((count,))
     array = np.asarray(values, dtype=float).reshape(-1)
     if array.size != count:
@@ -52,6 +57,12 @@ def _sequence_values(values: Any, count: int, name: str) -> Any:
 def _current_array(values: Any) -> np.ndarray:
     """Return current numeric values for initialization only."""
     if isinstance(values, csdl.Variable):
+        if values.value is None:
+            raise ValueError(
+                "an auxiliary target has no value available for initialization. "
+                "Supply design variables as csdl.Variable inputs carrying an "
+                "initial value rather than as computed expressions."
+            )
         return np.asarray(values.value, dtype=float).reshape(-1)
     return np.asarray(values, dtype=float).reshape(-1)
 
