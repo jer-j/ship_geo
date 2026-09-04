@@ -54,6 +54,52 @@ def _sequence_values(values: Any, count: int, name: str) -> Any:
     return array
 
 
+def _interpolation_weights(stations: np.ndarray, station: float) -> np.ndarray:
+    """Return linear-interpolation weights over ``stations`` at ``station``."""
+    weights = np.zeros(stations.size)
+    if station <= stations[0]:
+        weights[0] = 1.0
+    elif station >= stations[-1]:
+        weights[-1] = 1.0
+    else:
+        upper = int(np.searchsorted(stations, station))
+        lower = upper - 1
+        span = stations[upper] - stations[lower]
+        fraction = (station - stations[lower]) / span
+        weights[lower] = 1.0 - fraction
+        weights[upper] = fraction
+    return weights
+
+
+def _weighted_target(weights: np.ndarray, values: Any) -> Any:
+    """Interpolate an auxiliary target, keeping design variables differentiable."""
+    if isinstance(values, csdl.Variable):
+        return csdl.vdot(
+            csdl.Variable(value=weights, name="interpolation_weights"), values
+        ).reshape((1,))
+    return np.asarray(
+        [float(np.dot(weights, np.asarray(values, dtype=float).reshape(-1)))]
+    )
+
+
+def _stack_pair(first: Any, second: Any) -> Any:
+    """Build a two-vector from scalars that may be CSDL expressions."""
+    if isinstance(first, csdl.Variable) or isinstance(second, csdl.Variable):
+        anchor = first if isinstance(first, csdl.Variable) else second
+        first_variable = (
+            first if isinstance(first, csdl.Variable) else 0.0 * anchor + float(first)
+        )
+        second_variable = (
+            second
+            if isinstance(second, csdl.Variable)
+            else 0.0 * anchor + float(second)
+        )
+        return csdl.concatenate(
+            (first_variable.reshape((1,)), second_variable.reshape((1,)))
+        )
+    return np.asarray([float(first), float(second)])
+
+
 def _current_array(values: Any) -> np.ndarray:
     """Return current numeric values for initialization only."""
     if isinstance(values, csdl.Variable):
@@ -559,8 +605,6 @@ class FormParameterHullProblem:
             local_drafts = _current_array(self.targets.drafts)
             depth_fractions = bulge_depths / np.maximum(local_drafts, 1.0e-12)
             bulge_curve_parameters = _current_array(self.targets.bulge_parameters)
-            breadth_curve = curves[FormCurveKind.BULGE_HALF_BREADTH]
-            height_curve = curves[FormCurveKind.BULGE_HEIGHT]
             section_interior_points = []
             for station in section_stations:
                 station_value = float(station)
@@ -578,11 +622,17 @@ class FormParameterHullProblem:
                 ):
                     section_interior_points.append(())
                     continue
-                waypoint = csdl.concatenate(
-                    (
-                        height_curve.evaluate(station_value).reshape((1,)),
-                        breadth_curve.evaluate(station_value).reshape((1,)),
-                    )
+                # Drive the waypoint from the observations directly rather
+                # than from the fitted bulge curves. Those curves are tied to
+                # their targets only by least squares, while the section is
+                # pinned by its endpoints, tangents, area, and section-fit
+                # objective. Routing the constraint through them lets the
+                # section drag the curve instead of the request moving the
+                # section, which leaves the dome variable with no authority.
+                weights = _interpolation_weights(fit_station_values, station_value)
+                waypoint = _stack_pair(
+                    _weighted_target(weights, self.targets.bulge_heights),
+                    _weighted_target(weights, self.targets.bulge_half_breadths),
                 )
                 section_interior_points.append(((parameter, waypoint),))
 
