@@ -148,6 +148,7 @@ class SectionLoftProblem:
         section_interior_points: Sequence[Any] | None = None,
         section_geometry_hints: Sequence[dict[str, float]] | None = None,
         num_section_control_points: int = 8,
+        num_deck_control_points: int | None = None,
         section_degree: int = 3,
         longitudinal_degree: int = 3,
         section_fairness_weights: dict[int, float] | None = None,
@@ -246,6 +247,9 @@ class SectionLoftProblem:
             raise ValueError("section_geometry_hints must match station_parameters.")
         self.section_geometry_hints = section_geometry_hints
         self.num_section_control_points = int(num_section_control_points)
+        self.num_deck_control_points = (
+            None if num_deck_control_points is None else int(num_deck_control_points)
+        )
         self.section_degree = int(section_degree)
         self.longitudinal_degree = int(longitudinal_degree)
         self.section_fairness_weights = section_fairness_weights
@@ -328,6 +332,7 @@ class SectionLoftProblem:
                 ),
                 template=SectionTemplate.ROUND_BILGE,
                 num_control_points=self.num_section_control_points,
+                num_deck_control_points=self.num_deck_control_points,
                 degree=self.section_degree,
                 fairness_weights=self.section_fairness_weights,
                 fit_parameters=self.section_fit_parameters,

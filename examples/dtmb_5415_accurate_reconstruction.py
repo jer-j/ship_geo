@@ -81,6 +81,15 @@ def main() -> None:
     parser.add_argument("--backend", choices=("jax", "inline"), default="jax")
     parser.add_argument("--num-form-control-points", type=int, default=10)
     parser.add_argument("--num-section-control-points", type=int, default=8)
+    parser.add_argument(
+        "--num-deck-control-points",
+        type=int,
+        default=5,
+        help=(
+            "Freeboard segments carry only two point and two tangent conditions, "
+            "so they need far fewer coefficients than the underwater sections."
+        ),
+    )
     parser.add_argument("--max-iter", type=int, default=12)
     parser.add_argument("--print-status", action="store_true")
     parser.add_argument(
@@ -149,6 +158,7 @@ def main() -> None:
         targets,
         num_form_control_points=arguments.num_form_control_points,
         num_section_control_points=arguments.num_section_control_points,
+        num_deck_control_points=arguments.num_deck_control_points,
         section_station_parameters=section_data.station_parameters,
         section_fit_parameters=section_data.curve_parameters,
         section_fit_points=section_data.points,

@@ -284,6 +284,7 @@ class FormParameterHullProblem:
         fit_targets: LongitudinalFitTargets,
         num_form_control_points: int = 10,
         num_section_control_points: int = 8,
+        num_deck_control_points: int | None = None,
         section_station_parameters: npt.ArrayLike | None = None,
         section_fit_parameters: npt.ArrayLike | None = None,
         section_fit_points: Any | None = None,
@@ -309,6 +310,9 @@ class FormParameterHullProblem:
         self.targets = targets
         self.num_form_control_points = int(num_form_control_points)
         self.num_section_control_points = int(num_section_control_points)
+        self.num_deck_control_points = (
+            None if num_deck_control_points is None else int(num_deck_control_points)
+        )
         section_stations = (
             targets.station_parameters
             if section_station_parameters is None
@@ -617,6 +621,7 @@ class FormParameterHullProblem:
             section_interior_points=section_interior_points,
             section_geometry_hints=section_geometry_hints,
             num_section_control_points=self.num_section_control_points,
+            num_deck_control_points=self.num_deck_control_points,
             pointed_ends=(True, section_stations[-1] < 1.0),
             x_origin=self.x_origin,
             section_fit_parameters=self.section_fit_parameters,
