@@ -20,7 +20,10 @@ from ..core.ship_geometry.form_parameter_hull import (
     NavalHullParameters,
 )
 from ..core.ship_geometry.refinement import fit_offset_surface
-from ..core.ship_geometry.surfaces import TensorProductSurface
+from ..core.ship_geometry.surfaces import (
+    LongitudinalLoftRegion,
+    TensorProductSurface,
+)
 from .iges import PolynomialIGESPatch, read_polynomial_iges_surfaces
 
 DTMB5415_SOURCE_COMMIT = "afad0f04a2ce5ee03f37dcefbe697a5281bc0168"
@@ -146,6 +149,10 @@ class DTMB5415FormCalibration:
     validation_station_rms_errors: np.ndarray
     validation_section_rms_error: float
     validation_section_maximum_error: float
+    single_patch_validation_station_rms_errors: np.ndarray
+    single_patch_validation_section_rms_error: float
+    single_patch_validation_section_maximum_error: float
+    maximum_regional_boundary_gap: float
 
 
 _FIT_LEVELS: dict[str, dict[DTMB5415Region, tuple[int, int]]] = {
@@ -575,20 +582,31 @@ def extract_dtmb_5415_section_fit_data(
     )
 
 
+def dtmb_5415_longitudinal_regions(
+    reference: DTMB5415Reference,
+    form_data: DTMB5415FormData,
+) -> tuple[LongitudinalLoftRegion, ...]:
+    """Map the canonical dome-transition bounds into the naval coordinate."""
+    transition = reference.patches[DTMB5415Region.SONAR_DOME_TRANSITION]
+    x_bounds = (
+        float(np.min(transition.coefficients[:, :, 0])),
+        float(np.max(transition.coefficients[:, :, 0])),
+    )
+    length = float(form_data.primary_parameters.length_between_perpendiculars)
+    boundaries = tuple(
+        (coordinate - form_data.coordinate_origin) / length + 0.5
+        for coordinate in x_bounds
+    )
+    return (
+        LongitudinalLoftRegion("forward_sonar_dome", 0.0, boundaries[0]),
+        LongitudinalLoftRegion("dome_transition", boundaries[0], boundaries[1]),
+        LongitudinalLoftRegion("main_hull", boundaries[1], 1.0),
+    )
+
+
 def calibrate_dtmb_5415_form_hull(
     reference: DTMB5415Reference,
-    section_station_parameters: npt.ArrayLike = (
-        0.04,
-        0.08,
-        0.12,
-        0.18,
-        0.28,
-        0.42,
-        0.58,
-        0.75,
-        0.90,
-        1.0,
-    ),
+    section_station_parameters: npt.ArrayLike | None = None,
     num_form_control_points: int = 10,
     num_section_control_points: int = 8,
     form_fit_weight: float = 100.0,
@@ -611,6 +629,24 @@ def calibrate_dtmb_5415_form_hull(
 ) -> DTMB5415FormCalibration:
     """Calibrate a naval-variable hull while preserving primary particulars."""
     form_data = extract_dtmb_5415_form_data(reference)
+    regions = dtmb_5415_longitudinal_regions(reference, form_data)
+    if section_station_parameters is None:
+        transition_start = regions[0].end
+        transition_end = regions[1].end
+        section_station_parameters = (
+            0.04,
+            0.08,
+            transition_start,
+            transition_start + (transition_end - transition_start) / 3.0,
+            transition_start + 2.0 * (transition_end - transition_start) / 3.0,
+            transition_end,
+            0.28,
+            0.42,
+            0.58,
+            0.75,
+            0.90,
+            1.0,
+        )
     section_data = extract_dtmb_5415_section_fit_data(
         reference, section_station_parameters
     )
@@ -625,6 +661,7 @@ def calibrate_dtmb_5415_form_hull(
         section_fit_weight=section_fit_weight,
         form_fit_weight=form_fit_weight,
         x_origin=form_data.coordinate_origin,
+        longitudinal_regions=regions,
         name="dtmb_5415_form_calibration",
     ).solve(tolerance=tolerance, max_iter=max_iter, print_status=print_status)
 
@@ -664,27 +701,45 @@ def calibrate_dtmb_5415_form_hull(
         residual = np.asarray(curve.evaluate(fit_stations).value).reshape(-1) - targets
         auxiliary_errors[name] = float(np.sqrt(np.mean(residual**2)))
 
-    def section_errors(data: DTMB5415SectionFitData) -> np.ndarray:
+    def section_errors(data: DTMB5415SectionFitData, regional: bool) -> np.ndarray:
         surface_points = []
         for station in data.station_parameters:
-            parameters = np.column_stack(
-                (
-                    data.curve_parameters,
-                    np.full(data.curve_parameters.size, station),
+            if regional:
+                regional_surface = geometry.hull.regional_surface
+                if regional_surface is None:
+                    raise RuntimeError("regional DTMB calibration surface is missing.")
+                values = np.asarray(
+                    regional_surface.evaluate_section(
+                        float(station), data.curve_parameters
+                    ).value
                 )
-            )
-            values = np.asarray(geometry.hull.surface.evaluate(parameters).value)
+            else:
+                parameters = np.column_stack(
+                    (
+                        data.curve_parameters,
+                        np.full(data.curve_parameters.size, station),
+                    )
+                )
+                values = np.asarray(geometry.hull.surface.evaluate(parameters).value)
             surface_points.append(values[:, [2, 1]])
         residual = np.asarray(surface_points) - data.points
         return np.linalg.norm(residual, axis=2)
 
-    fitting_distances = section_errors(section_data)
+    fitting_distances = section_errors(section_data, regional=True)
     validation_data = extract_dtmb_5415_section_fit_data(
         reference,
         validation_station_parameters,
         num_curve_points=section_data.curve_parameters.size,
     )
-    validation_distances = section_errors(validation_data)
+    validation_distances = section_errors(validation_data, regional=True)
+    single_patch_distances = section_errors(validation_data, regional=False)
+    regional_surface = geometry.hull.regional_surface
+    if regional_surface is None:
+        raise RuntimeError("regional DTMB calibration surface is missing.")
+    maximum_boundary_gap = max(
+        float(np.max(np.abs(gap.value)))
+        for gap in regional_surface.boundary_gaps().values()
+    )
     return DTMB5415FormCalibration(
         geometry=geometry,
         form_data=form_data,
@@ -697,6 +752,16 @@ def calibrate_dtmb_5415_form_hull(
         validation_station_rms_errors=np.sqrt(np.mean(validation_distances**2, axis=1)),
         validation_section_rms_error=float(np.sqrt(np.mean(validation_distances**2))),
         validation_section_maximum_error=float(np.max(validation_distances)),
+        single_patch_validation_station_rms_errors=np.sqrt(
+            np.mean(single_patch_distances**2, axis=1)
+        ),
+        single_patch_validation_section_rms_error=float(
+            np.sqrt(np.mean(single_patch_distances**2))
+        ),
+        single_patch_validation_section_maximum_error=float(
+            np.max(single_patch_distances)
+        ),
+        maximum_regional_boundary_gap=maximum_boundary_gap,
     )
 
 

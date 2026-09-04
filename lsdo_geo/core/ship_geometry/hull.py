@@ -22,7 +22,12 @@ from .sections import (
     SectionTemplate,
     collapsed_section,
 )
-from .surfaces import CompatibleLoft, TensorProductSurface
+from .surfaces import (
+    CompatibleLoft,
+    LongitudinalLoftRegion,
+    RegionalCompatibleLoft,
+    TensorProductSurface,
+)
 from .validity import SurfaceValidity, evaluate_surface_validity
 
 
@@ -55,6 +60,7 @@ class HullGeometry:
     hydrostatics: Hydrostatics
     validity: SurfaceValidity
     variational_result: VariationalResult
+    regional_surface: RegionalCompatibleLoft | None = None
 
 
 @dataclass
@@ -65,6 +71,7 @@ class SectionLoftAssembly:
     section_assemblies: tuple[SectionAssembly, ...]
     section_parameters: np.ndarray
     surface_assembly: FSurfaceAssembly | None = None
+    regional_surface: RegionalCompatibleLoft | None = None
 
     def finalize(
         self,
@@ -92,6 +99,7 @@ class SectionLoftAssembly:
             hydrostatics=compute_hydrostatics(surface, analysis_parameters),
             validity=evaluate_surface_validity(surface),
             variational_result=result,
+            regional_surface=self.regional_surface,
         )
 
 
@@ -134,6 +142,7 @@ class SectionLoftProblem:
         section_fit_parameters: npt.ArrayLike | None = None,
         section_fit_points: Any | None = None,
         section_fit_weight: float = 0.0,
+        longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
         name: str = "hull_geometry",
     ) -> None:
         parameters = np.asarray(station_parameters, dtype=float).reshape(-1)
@@ -232,6 +241,9 @@ class SectionLoftProblem:
                     "section_fit_points must have shape "
                     "(num_sections, num_fit_parameters, 2)."
                 )
+        self.longitudinal_regions = (
+            None if longitudinal_regions is None else tuple(longitudinal_regions)
+        )
         self.name = name
 
     def solve(
@@ -319,11 +331,23 @@ class SectionLoftProblem:
             )
             surface = surface_assembly.surface
 
+        regional_surface = None
+        if self.longitudinal_regions is not None:
+            regional_surface = RegionalCompatibleLoft.create(
+                sections=loft_sections,
+                station_parameters=loft_parameters,
+                x_coordinates=x_coordinates,
+                regions=self.longitudinal_regions,
+                longitudinal_degree=self.longitudinal_degree,
+                name=f"{self.name}_regional_surface",
+            )
+
         return SectionLoftAssembly(
             surface=surface,
             section_assemblies=tuple(assemblies),
             section_parameters=self.parameters.copy(),
             surface_assembly=surface_assembly,
+            regional_surface=regional_surface,
         )
 
     def _assemble_variational_surface(

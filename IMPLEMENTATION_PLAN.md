@@ -129,8 +129,8 @@ export remain deferred.
 
 Status: primary form-parameter hierarchy, auxiliary-function fitting,
 surface-level DTMB 5415 calibration, and independent-station validation are
-implemented. The primary variables remain exact to $2.85\times10^{-16}$; the
-current single-patch surface reaches $15.16\ \mathrm{mm}$ RMS on independent
+implemented. The primary variables remain exact to $9.85\times10^{-16}$; the
+controlled single-patch surface reaches $15.29\ \mathrm{mm}$ RMS on independent
 sections and establishes the baseline for component-wise refinement.
 
 - Expose $L_{PP}$, $B$, $T$, $\nabla$, $x_{LCB}$, and $C_{WP}$ as primary
@@ -145,7 +145,13 @@ sections and establishes the baseline for component-wise refinement.
 
 ## Milestone 9: component-wise naval parameterization
 
-Status: next.
+Status: the regional compatible-loft abstraction and DTMB 5415 forward,
+transition, and main-hull mapping are implemented. The adjacent patches reuse
+the same solved boundary sections, producing zero positional seam gap without
+adding redundant KKT constraints or another Newton solve. The regional surface
+reduces independent-section RMS from $15.29$ to $14.22\ \mathrm{mm}$. The nearly
+unchanged maximum error shows that a sonar-dome-specific transverse template is
+the next required capability.
 
 - Split the first-principles longitudinal representation into the forward
   sonar-dome/bow, dome transition, and main-hull regions identified by the
@@ -158,6 +164,9 @@ Status: next.
   LCB, and $C_{WP}$ exact.
 - Re-run the same fit-station and independent-station comparisons so every
   increase in representation complexity has a quantified benefit.
+- Add a sonar-dome section topology whose public variables distinguish dome
+  depth, dome breadth, maximum-breadth height, attachment height, and local
+  tangency from ordinary round-bilge deadrise and flare.
 
 ## Verification policy
 

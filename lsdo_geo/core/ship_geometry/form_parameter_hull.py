@@ -8,6 +8,7 @@ longitudinal center of buoyancy, beam, draft, and waterplane constraints.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +25,7 @@ from .form_curves import (
     FormCurveProblem,
 )
 from .hull import HullGeometry, SectionLoftAssembly, SectionLoftProblem
+from .surfaces import LongitudinalLoftRegion
 
 
 def _scalar_value(value: Any) -> float:
@@ -211,6 +213,7 @@ class FormParameterHullProblem:
         form_fit_weight: float = 1.0,
         form_fairness_weight: float = 1.0e-4,
         x_origin: Any = 0.0,
+        longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
         name: str = "form_parameter_hull",
     ) -> None:
         primary_parameters.validate_current_values()
@@ -244,6 +247,9 @@ class FormParameterHullProblem:
         self.form_fit_weight = float(form_fit_weight)
         self.form_fairness_weight = float(form_fairness_weight)
         self.x_origin = x_origin
+        self.longitudinal_regions = (
+            None if longitudinal_regions is None else tuple(longitudinal_regions)
+        )
         self.name = name
 
     def solve(
@@ -369,6 +375,7 @@ class FormParameterHullProblem:
             section_fit_parameters=self.section_fit_parameters,
             section_fit_points=self.section_fit_points,
             section_fit_weight=self.section_fit_weight,
+            longitudinal_regions=self.longitudinal_regions,
             name=self.name,
         )
         section_assembly = section_problem.assemble(system)

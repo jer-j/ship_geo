@@ -33,13 +33,16 @@ def _save(figure: plt.Figure, path: Path) -> None:
 def _surface_section(
     calibration: DTMB5415FormCalibration, station: float, parameters: np.ndarray
 ) -> np.ndarray:
+    regional = calibration.geometry.hull.regional_surface
+    if regional is not None:
+        return np.asarray(regional.evaluate_section(station, parameters).value)
     coordinates = np.column_stack((parameters, np.full(parameters.size, station)))
     return np.asarray(calibration.geometry.hull.surface.evaluate(coordinates).value)
 
 
 def _combined_section_mesh(
     calibration: DTMB5415FormCalibration,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return station-sorted canonical and generated wireframe points."""
     fitting = calibration.section_fit_data
     validation = calibration.validation_section_data
@@ -70,33 +73,49 @@ def _combined_section_mesh(
             for station in stations
         ]
     )
-    return exact, generated
+    return exact, generated, stations
 
 
 def _draw_wireframe(
     axis: plt.Axes,
     exact: np.ndarray,
     generated: np.ndarray,
+    stations: np.ndarray,
+    calibration: DTMB5415FormCalibration,
 ) -> None:
     """Draw two coincident-comparison wireframes without opaque surfaces."""
+    colors = {
+        "forward_sonar_dome": "#d55e00",
+        "dome_transition": "#e69f00",
+        "main_hull": "#0072b2",
+    }
+    regional = calibration.geometry.hull.regional_surface
+    if regional is None:
+        raise RuntimeError("regional surface is required for this comparison.")
     for section in exact:
         axis.plot(*section.T, color="0.35", linewidth=1.5, alpha=0.72)
-    for section in generated:
+    for section, station in zip(generated, stations):
+        region = regional.region_at(float(station))
         axis.plot(
             *section.T,
-            color="#0072b2",
+            color=colors[region.name],
             linewidth=0.95,
             linestyle="--",
         )
     for index in range(0, exact.shape[1], 2):
         axis.plot(*exact[:, index, :].T, color="0.35", linewidth=1.0, alpha=0.60)
-        axis.plot(
-            *generated[:, index, :].T,
-            color="#0072b2",
-            linewidth=0.8,
-            linestyle="--",
-            alpha=0.88,
-        )
+        for region in regional.regions:
+            mask = (stations >= region.start - 1.0e-12) & (
+                stations <= region.end + 1.0e-12
+            )
+            if np.count_nonzero(mask) >= 2:
+                axis.plot(
+                    *generated[mask, index, :].T,
+                    color=colors[region.name],
+                    linewidth=0.8,
+                    linestyle="--",
+                    alpha=0.88,
+                )
 
 
 def _plot_surface_overlay(output: Path, calibration: DTMB5415FormCalibration) -> None:
@@ -104,10 +123,16 @@ def _plot_surface_overlay(output: Path, calibration: DTMB5415FormCalibration) ->
     figure = plt.figure(figsize=(13.0, 5.8))
     perspective = figure.add_subplot(1, 2, 1, projection="3d")
     bow = figure.add_subplot(1, 2, 2, projection="3d")
-    exact, generated = _combined_section_mesh(calibration)
-    _draw_wireframe(perspective, exact, generated)
+    exact, generated, stations = _combined_section_mesh(calibration)
+    _draw_wireframe(perspective, exact, generated, stations, calibration)
     bow_mask = exact[:, 0, 0] <= -1.75
-    _draw_wireframe(bow, exact[bow_mask], generated[bow_mask])
+    _draw_wireframe(
+        bow,
+        exact[bow_mask],
+        generated[bow_mask],
+        stations[bow_mask],
+        calibration,
+    )
     for axis in (perspective, bow):
         axis.set(xlabel="x [m]", ylabel="y [m]", zlabel="z [m]")
         axis.view_init(elev=19.0, azim=-64.0)
@@ -122,14 +147,28 @@ def _plot_surface_overlay(output: Path, calibration: DTMB5415FormCalibration) ->
             Line2D(
                 [0],
                 [0],
+                color="#d55e00",
+                linestyle="--",
+                label="Forward bow / sonar dome",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color="#e69f00",
+                linestyle="--",
+                label="Dome transition",
+            ),
+            Line2D(
+                [0],
+                [0],
                 color="#0072b2",
                 linestyle="--",
-                label="Naval-variable F-Spline hull",
+                label="Main hull",
             ),
         ),
         loc="upper center",
         bbox_to_anchor=(0.5, 0.935),
-        ncol=2,
+        ncol=4,
         frameon=False,
     )
     figure.suptitle(
@@ -255,15 +294,25 @@ def _plot_diagnostics(output: Path, calibration: DTMB5415FormCalibration) -> Non
         axis.grid(alpha=0.22)
     error_axis = axes.ravel()[5]
     validation = calibration.validation_section_data.station_parameters
+    width = 0.025
     error_axis.bar(
-        validation,
+        validation - 0.5 * width,
+        1.0e3 * calibration.single_patch_validation_station_rms_errors,
+        width=width,
+        color="0.55",
+        label="Single patch",
+    )
+    error_axis.bar(
+        validation + 0.5 * width,
         1.0e3 * calibration.validation_station_rms_errors,
-        width=0.055,
+        width=width,
         color="#0072b2",
+        label="Three regions",
     )
     error_axis.set_ylabel("Section RMS error [mm]")
     error_axis.set_title("Independent holdout sections")
     error_axis.grid(alpha=0.22, axis="y")
+    error_axis.legend(frameon=False)
     for axis in axes[-1, :]:
         axis.set_xlabel(r"Longitudinal parameter $v$")
     handles, labels = axes[0, 0].get_legend_handles_labels()
@@ -313,6 +362,15 @@ def main() -> None:
         "validation-section RMS/max [mm]:",
         1.0e3 * calibration.validation_section_rms_error,
         1.0e3 * calibration.validation_section_maximum_error,
+    )
+    print(
+        "single-patch validation RMS/max [mm]:",
+        1.0e3 * calibration.single_patch_validation_section_rms_error,
+        1.0e3 * calibration.single_patch_validation_section_maximum_error,
+    )
+    print(
+        "maximum regional boundary gap [m]:",
+        calibration.maximum_regional_boundary_gap,
     )
     _plot_surface_overlay(arguments.output, calibration)
     _plot_body_plan(_derived_output(arguments.output, "body_plan"), calibration)

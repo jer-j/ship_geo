@@ -55,8 +55,10 @@ from .sections import (
 )
 from .surfaces import (
     CompatibleLoft,
+    LongitudinalLoftRegion,
     PatchConnection,
     PatchGraph,
+    RegionalCompatibleLoft,
     TensorProductSurface,
     wigley_surface,
 )
@@ -78,10 +80,12 @@ __all__ = [
     "HullGeometry",
     "Hydrostatics",
     "LongitudinalFitTargets",
+    "LongitudinalLoftRegion",
     "NavalHullParameters",
     "OrientedSurfacePatch",
     "PatchConnection",
     "PatchGraph",
+    "RegionalCompatibleLoft",
     "SectionAssembly",
     "SectionLoftAssembly",
     "SectionLoftProblem",

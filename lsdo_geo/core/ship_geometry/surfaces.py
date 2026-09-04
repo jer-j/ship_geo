@@ -263,6 +263,148 @@ class CompatibleLoft:
                 raise ValueError("all loft sections must share degree and knots.")
 
 
+@dataclass(frozen=True)
+class LongitudinalLoftRegion:
+    """One named longitudinal interval of a regional compatible loft."""
+
+    name: str
+    start: float
+    end: float
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("region name must not be empty.")
+        if not 0.0 <= self.start < self.end <= 1.0:
+            raise ValueError("region bounds must satisfy 0 <= start < end <= 1.")
+
+
+@dataclass
+class RegionalCompatibleLoft:
+    """Contiguous surface patches derived from one compatible section family.
+
+    Every interface section is shared by the adjacent lofts, so positional
+    continuity is exact by construction and adds no redundant equality
+    constraint to the global variational system.
+    """
+
+    regions: tuple[LongitudinalLoftRegion, ...]
+    patches: dict[str, TensorProductSurface]
+
+    @classmethod
+    def create(
+        cls,
+        sections: Sequence[FSplineCurve],
+        station_parameters: npt.ArrayLike,
+        x_coordinates: Sequence[Any] | csdl.Variable | npt.ArrayLike,
+        regions: Sequence[LongitudinalLoftRegion],
+        longitudinal_degree: int = 3,
+        quadrature_order: tuple[int, int] = (6, 6),
+        name: str = "regional_hull_surface",
+    ) -> RegionalCompatibleLoft:
+        """Loft each region through a subset of shared global sections."""
+        parameters = np.asarray(station_parameters, dtype=float).reshape(-1)
+        if parameters.size != len(sections):
+            raise ValueError("station_parameters must match the section count.")
+        if np.any(np.diff(parameters) <= 0.0):
+            raise ValueError("station_parameters must be strictly increasing.")
+        if isinstance(x_coordinates, csdl.Variable):
+            if x_coordinates.size != len(sections):
+                raise ValueError("x_coordinates must match the section count.")
+            x_values = [x_coordinates[index] for index in range(len(sections))]
+        else:
+            x_values = list(x_coordinates)
+            if len(x_values) != len(sections):
+                raise ValueError("x_coordinates must match the section count.")
+
+        definitions = tuple(regions)
+        if not definitions:
+            raise ValueError("at least one longitudinal region is required.")
+        if len({region.name for region in definitions}) != len(definitions):
+            raise ValueError("longitudinal region names must be unique.")
+        for first, second in pairwise(definitions):
+            if not np.isclose(first.end, second.start, atol=1.0e-12, rtol=0.0):
+                raise ValueError("longitudinal regions must be ordered and contiguous.")
+
+        patches: dict[str, TensorProductSurface] = {}
+        for region in definitions:
+            mask = (parameters >= region.start - 1.0e-12) & (
+                parameters <= region.end + 1.0e-12
+            )
+            indices = np.flatnonzero(mask)
+            if indices.size < longitudinal_degree + 1:
+                raise ValueError(
+                    f"region {region.name!r} needs at least "
+                    f"{longitudinal_degree + 1} sections."
+                )
+            selected = parameters[indices]
+            if not np.isclose(selected[0], region.start) or not np.isclose(
+                selected[-1], region.end
+            ):
+                raise ValueError(
+                    f"region {region.name!r} bounds must be shared section stations."
+                )
+            local_parameters = (selected - region.start) / (region.end - region.start)
+            patches[region.name] = CompatibleLoft.create(
+                sections=[sections[index] for index in indices],
+                station_parameters=local_parameters,
+                x_coordinates=[x_values[index] for index in indices],
+                longitudinal_degree=longitudinal_degree,
+                quadrature_order=quadrature_order,
+                name=f"{name}_{region.name}",
+            )
+        return cls(definitions, patches)
+
+    def region_at(self, station_parameter: float) -> LongitudinalLoftRegion:
+        """Return the deterministic patch interval containing a global station."""
+        station = float(station_parameter)
+        for index, region in enumerate(self.regions):
+            upper_inclusive = index == len(self.regions) - 1
+            if region.start <= station < region.end or (
+                upper_inclusive and np.isclose(station, region.end)
+            ):
+                return region
+        raise ValueError("station_parameter lies outside the regional loft.")
+
+    def evaluate_section(
+        self, station_parameter: float, transverse_parameters: npt.ArrayLike
+    ) -> csdl.Variable:
+        """Evaluate a constant-global-station section on its local patch."""
+        region = self.region_at(station_parameter)
+        transverse = np.asarray(transverse_parameters, dtype=float).reshape(-1)
+        local_station = (float(station_parameter) - region.start) / (
+            region.end - region.start
+        )
+        coordinates = np.column_stack(
+            (transverse, np.full(transverse.size, local_station))
+        )
+        return self.patches[region.name].evaluate(coordinates)
+
+    def boundary_gaps(self, samples: int = 11) -> dict[str, csdl.Variable]:
+        """Return exact adjacent-patch positional gap fields."""
+        if samples < 2:
+            raise ValueError("at least two boundary samples are required.")
+        transverse = np.linspace(0.0, 1.0, samples)
+        output: dict[str, csdl.Variable] = {}
+        for first, second in pairwise(self.regions):
+            first_points = self.patches[first.name].evaluate(
+                np.column_stack((transverse, np.ones(samples)))
+            )
+            second_points = self.patches[second.name].evaluate(
+                np.column_stack((transverse, np.zeros(samples)))
+            )
+            output[f"{first.name}:{second.name}"] = first_points - second_points
+        return output
+
+    def patch_graph(self) -> PatchGraph:
+        """Return the explicit connectivity graph for downstream operations."""
+        graph = PatchGraph()
+        for region in self.regions:
+            graph.add_patch(region.name, self.patches[region.name])
+        for first, second in pairwise(self.regions):
+            graph.connect(PatchConnection(first.name, "v1", second.name, "v0"))
+        return graph
+
+
 Edge = Literal["u0", "u1", "v0", "v1"]
 
 

@@ -12,7 +12,9 @@ from lsdo_geo import (
     FormParameterHullProblem,
     FSplineCurve,
     LongitudinalFitTargets,
+    LongitudinalLoftRegion,
     NavalHullParameters,
+    RegionalCompatibleLoft,
     SectionLoftProblem,
     SectionProblem,
     SectionTemplate,
@@ -37,7 +39,7 @@ from lsdo_geo import (
 def test_compatible_loft_interpolates_nonuniform_section_stations():
     recorder = csdl.Recorder(inline=True)
     recorder.start()
-    stations = np.array([0.0, 0.05, 0.12, 0.30, 0.70, 1.0])
+    stations = np.array([0.0, 0.05, 0.08, 0.12, 0.30, 0.70, 1.0])
     space = lfs.BSplineSpace(
         num_parametric_dimensions=1,
         degree=(3,),
@@ -61,12 +63,31 @@ def test_compatible_loft_interpolates_nonuniform_section_stations():
             )
         )
     surface = CompatibleLoft.create(sections, stations, stations)
+    regional = RegionalCompatibleLoft.create(
+        sections,
+        stations,
+        stations,
+        (
+            LongitudinalLoftRegion("forward", 0.0, 0.12),
+            LongitudinalLoftRegion("main", 0.12, 1.0),
+        ),
+    )
     transverse = np.linspace(0.0, 1.0, 9)
     for section, station in zip(sections, stations):
         coordinates = np.column_stack((transverse, np.full(transverse.size, station)))
         surface_values = np.asarray(surface.evaluate(coordinates).value)
         section_values = np.asarray(section.evaluate(transverse).value)
         np.testing.assert_allclose(surface_values[:, 1:], section_values[:, [1, 0]])
+        regional_values = np.asarray(
+            regional.evaluate_section(station, transverse).value
+        )
+        np.testing.assert_allclose(
+            regional_values[:, 1:], section_values[:, [1, 0]], atol=2.0e-14
+        )
+    assert set(regional.patches) == {"forward", "main"}
+    assert len(regional.patch_graph().connections) == 1
+    for gap in regional.boundary_gaps().values():
+        np.testing.assert_allclose(gap.value, 0.0, atol=2.0e-14)
     recorder.stop()
 
 
@@ -258,6 +279,12 @@ def test_section_family_uses_one_global_kkt_and_compatible_loft():
         keel_tangent_angles=[0.5, 0.5],
         waterline_tangent_angles=[0.0, 0.0],
         num_section_control_points=7,
+        longitudinal_degree=1,
+        longitudinal_regions=(
+            LongitudinalLoftRegion("bow", 0.0, 0.3),
+            LongitudinalLoftRegion("midbody", 0.3, 0.7),
+            LongitudinalLoftRegion("stern", 0.7, 1.0),
+        ),
         name="coupled_section_loft",
     )
     hull = problem.solve(max_iter=30)
@@ -271,6 +298,10 @@ def test_section_family_uses_one_global_kkt_and_compatible_loft():
         atol=1e-9,
     )
     assert hull.surface.coefficients.shape == (7, 4, 3)
+    assert hull.regional_surface is not None
+    assert len(hull.regional_surface.patches) == 3
+    for gap in hull.regional_surface.boundary_gaps().values():
+        np.testing.assert_allclose(gap.value, 0.0, atol=2.0e-12)
     hull.validity.assert_valid()
     recorder.stop()
 
