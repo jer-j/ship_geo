@@ -33,9 +33,6 @@ def _save(figure: plt.Figure, path: Path) -> None:
 def _surface_section(
     calibration: DTMB5415FormCalibration, station: float, parameters: np.ndarray
 ) -> np.ndarray:
-    regional = calibration.geometry.hull.regional_surface
-    if regional is not None:
-        return np.asarray(regional.evaluate_section(station, parameters).value)
     coordinates = np.column_stack((parameters, np.full(parameters.size, station)))
     return np.asarray(calibration.geometry.hull.surface.evaluate(coordinates).value)
 
@@ -89,13 +86,19 @@ def _draw_wireframe(
         "dome_transition": "#e69f00",
         "main_hull": "#0072b2",
     }
-    regional = calibration.geometry.hull.regional_surface
-    if regional is None:
-        raise RuntimeError("regional surface is required for this comparison.")
+    regions = calibration.longitudinal_regions
+
+    def region_at(station: float):
+        return next(
+            region
+            for region in regions
+            if region.start - 1.0e-12 <= station <= region.end + 1.0e-12
+        )
+
     for section in exact:
         axis.plot(*section.T, color="0.35", linewidth=1.5, alpha=0.72)
     for section, station in zip(generated, stations):
-        region = regional.region_at(float(station))
+        region = region_at(float(station))
         axis.plot(
             *section.T,
             color=colors[region.name],
@@ -104,7 +107,7 @@ def _draw_wireframe(
         )
     for index in range(0, exact.shape[1], 2):
         axis.plot(*exact[:, index, :].T, color="0.35", linewidth=1.0, alpha=0.60)
-        for region in regional.regions:
+        for region in regions:
             mask = (stations >= region.start - 1.0e-12) & (
                 stations <= region.end + 1.0e-12
             )
@@ -300,14 +303,14 @@ def _plot_diagnostics(output: Path, calibration: DTMB5415FormCalibration) -> Non
         1.0e3 * calibration.single_patch_validation_station_rms_errors,
         width=width,
         color="0.55",
-        label="Single patch",
+        label="Averaged knots",
     )
     error_axis.bar(
         validation + 0.5 * width,
         1.0e3 * calibration.validation_station_rms_errors,
         width=width,
         color="#0072b2",
-        label="Three regions",
+        label=r"Feature-aligned $C^1$ knots",
     )
     error_axis.set_ylabel("Section RMS error [mm]")
     error_axis.set_title("Independent holdout sections")
@@ -364,13 +367,9 @@ def main() -> None:
         1.0e3 * calibration.validation_section_maximum_error,
     )
     print(
-        "single-patch validation RMS/max [mm]:",
+        "averaged-knot baseline RMS/max [mm]:",
         1.0e3 * calibration.single_patch_validation_section_rms_error,
         1.0e3 * calibration.single_patch_validation_section_maximum_error,
-    )
-    print(
-        "maximum regional boundary gap [m]:",
-        calibration.maximum_regional_boundary_gap,
     )
     _plot_surface_overlay(arguments.output, calibration)
     _plot_body_plan(_derived_output(arguments.output, "body_plan"), calibration)

@@ -5,10 +5,13 @@ from pathlib import Path
 import csdl_alpha as csdl
 import numpy as np
 
+from lsdo_geo import SectionTemplate
 from lsdo_geo.validation import (
     DTMB5415Reference,
     DTMB5415Region,
+    DTMB5415SectionFitData,
     PolynomialIGESPatch,
+    dtmb_5415_section_templates,
     extract_dtmb_5415_form_data,
     fit_dtmb_5415,
     read_polynomial_iges_surfaces,
@@ -200,3 +203,35 @@ def test_dtmb_form_data_separates_moulded_draft_from_sonar_dome_depth():
     assert data.station_regions[0] is DTMB5415Region.SONAR_DOME
     assert data.station_regions[-1] is DTMB5415Region.MAIN_HULL
     recorder.stop()
+
+
+def test_dtmb_section_templates_extract_dome_lobe_and_attachment():
+    parameters = np.linspace(0.0, 1.0, 9)
+    dome_points = np.column_stack(
+        (
+            np.linspace(-0.36, 0.0, 9),
+            [0.0, 0.07, 0.12, 0.08, 0.03, 0.02, 0.025, 0.035, 0.045],
+        )
+    )
+    main_points = np.column_stack(
+        (np.linspace(-0.248, 0.0, 9), np.linspace(0.0, 0.30, 9))
+    )
+    data = DTMB5415SectionFitData(
+        station_parameters=np.array([0.04, 0.50]),
+        curve_parameters=parameters,
+        points=np.stack((dome_points, main_points)),
+        longitudinal_coordinates=np.array([-2.63, 0.0]),
+        station_regions=(DTMB5415Region.SONAR_DOME, DTMB5415Region.MAIN_HULL),
+    )
+
+    templates, dome_parameters = dtmb_5415_section_templates(data)
+
+    assert templates == (SectionTemplate.SONAR_DOME, SectionTemplate.ROUND_BILGE)
+    assert dome_parameters[1] is None
+    dome = dome_parameters[0]
+    assert dome is not None
+    assert dome.depth == 0.36
+    assert dome.maximum_breadth_parameter == parameters[2]
+    assert dome.maximum_half_breadth == 0.12
+    assert dome.attachment_parameter == parameters[5]
+    assert dome.attachment_half_breadth == 0.02

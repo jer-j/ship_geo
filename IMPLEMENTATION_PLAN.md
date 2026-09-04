@@ -145,21 +145,21 @@ sections and establishes the baseline for component-wise refinement.
 
 ## Milestone 9: component-wise naval parameterization
 
-Status: the regional compatible-loft abstraction and DTMB 5415 forward,
-transition, and main-hull mapping are implemented. The adjacent patches reuse
-the same solved boundary sections, producing zero positional seam gap without
-adding redundant KKT constraints or another Newton solve. The regional surface
-reduces independent-section RMS from $15.29$ to $14.22\ \mathrm{mm}$. The nearly
-unchanged maximum error shows that a sonar-dome-specific transverse template is
-the next required capability.
+Status: the regional loft remains available as a diagnostic, but the primary
+architecture now follows the surface-combatant curve network and produces one
+tensor-product surface. The canonical transition locations become repeated
+internal knots with $C^1$ continuity. The implemented network exposes CPC,
+DWL, sectional area, keel and waterline tangents, entrance slope, and sectional
+fullness, with DECK, FOB, ASC, and local feature curves as named extensions.
+The sonar section template exposes dome depth, breadth, maximum-breadth height,
+attachment height and breadth, and local tangency as CSDL-connected variables.
 
-- Split the first-principles longitudinal representation into the forward
-  sonar-dome/bow, dome transition, and main-hull regions identified by the
-  canonical topology.
+- Represent the forward sonar-dome/bow, dome transition, and main-hull feature
+  intervals inside one longitudinal B-spline space.
 - Retain naval variables as the public design interface and expose only the
   additional regional shape controls needed to recover local fullness.
-- Couple regional curves and surfaces through shared-boundary position and
-  tangent constraints in one `VariationalSystem` and one Newton solve.
+- Align repeated internal knots to feature transitions and preserve at least
+  $C^1$ parametric continuity inside the single surface.
 - Fit auxiliary regional variables while keeping $L_{PP}$, $B$, $T$, $\nabla$,
   LCB, and $C_{WP}$ exact.
 - Re-run the same fit-station and independent-station comparisons so every
@@ -167,6 +167,11 @@ the next required capability.
 - Add a sonar-dome section topology whose public variables distinguish dome
   depth, dome breadth, maximum-breadth height, attachment height, and local
   tangency from ordinary round-bilge deadrise and flare.
+- Fit fair longitudinal sonar-depth, dome-breadth, maximum-breadth-height,
+  attachment-height, and attachment-breadth curves. The current two-station
+  hard-constraint experiment reduces overall single-patch holdout RMS from
+  $16.16$ to $15.06\ \mathrm{mm}$ but increases the local maximum to
+  $60.61\ \mathrm{mm}$, showing why those variables must evolve as curves.
 
 ## Verification policy
 

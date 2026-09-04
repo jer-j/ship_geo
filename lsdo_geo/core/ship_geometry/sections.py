@@ -29,6 +29,38 @@ class SectionTemplate(str, Enum):
 
     ROUND_BILGE = "round_bilge"
     HARD_CHINE = "hard_chine"
+    SONAR_DOME = "sonar_dome"
+
+
+@dataclass(frozen=True)
+class SonarDomeSectionParameters:
+    """Component-specific variables for a sonar-dome transverse section.
+
+    Heights are positive distances below the design waterline. Parametric
+    locations describe the fixed section topology and therefore remain ordinary
+    constants. All physical ordinates and tangent angles may be CSDL variables
+    or expressions.
+    """
+
+    depth: Any
+    maximum_breadth_parameter: float
+    maximum_breadth_height: Any
+    maximum_half_breadth: Any
+    attachment_parameter: float
+    attachment_height: Any
+    attachment_half_breadth: Any
+    maximum_breadth_tangent_angle: Any = 0.0
+    attachment_tangent_angle: Any | None = None
+
+    def validate(self) -> None:
+        """Validate the fixed topology coordinates of the dome section."""
+        maximum = float(self.maximum_breadth_parameter)
+        attachment = float(self.attachment_parameter)
+        if not 0.0 < maximum < attachment < 1.0:
+            raise ValueError(
+                "sonar-dome parameters must satisfy 0 < maximum breadth "
+                "parameter < attachment parameter < 1."
+            )
 
 
 def _vector2(first: Any, second: Any) -> Any:
@@ -117,6 +149,7 @@ class SectionProblem:
         template: SectionTemplate = SectionTemplate.ROUND_BILGE,
         chine_parameter: float = 0.5,
         chine_point: Any | None = None,
+        sonar_dome_parameters: SonarDomeSectionParameters | None = None,
         num_control_points: int = 8,
         degree: int = 3,
         fairness_weights: dict[int, float] | None = None,
@@ -131,7 +164,12 @@ class SectionProblem:
         self.station_parameter = float(station_parameter)
         self.template = SectionTemplate(template)
         self.name = name or f"section_{station_parameter:.4f}"
-        self.draft = draft
+        self.draft = (
+            sonar_dome_parameters.depth
+            if self.template is SectionTemplate.SONAR_DOME
+            and sonar_dome_parameters is not None
+            else draft
+        )
         self.half_breadth = half_breadth
         if (fit_parameters is None) != (fit_points is None):
             raise ValueError("fit_parameters and fit_points must be supplied together.")
@@ -162,6 +200,15 @@ class SectionProblem:
             if chine_point is None:
                 raise ValueError("hard-chine sections require chine_point=(z, y).")
             knots = _repeated_chine_knots(num_control_points, degree, chine_parameter)
+        if self.template is SectionTemplate.SONAR_DOME:
+            if sonar_dome_parameters is None:
+                raise ValueError("sonar-dome sections require sonar_dome_parameters.")
+            sonar_dome_parameters.validate()
+        elif sonar_dome_parameters is not None:
+            raise ValueError(
+                "sonar_dome_parameters may only be used with the sonar-dome "
+                "section template."
+            )
         self.problem = FSplineProblem(
             num_control_points=num_control_points,
             degree=degree,
@@ -171,7 +218,7 @@ class SectionProblem:
             quadrature_order=quadrature_order,
             name=self.name,
         )
-        self.problem.add_point_constraint(0.0, _vector2(-draft, 0.0))
+        self.problem.add_point_constraint(0.0, _vector2(-self.draft, 0.0))
         self.problem.add_point_constraint(1.0, _vector2(0.0, half_breadth))
         self.problem.add_tangent_angle_constraint(0.0, keel_tangent_angle)
         self.problem.add_tangent_angle_constraint(1.0, waterline_tangent_angle)
@@ -181,6 +228,27 @@ class SectionProblem:
             else:
                 target = np.asarray(chine_point, dtype=float)
             self.problem.add_point_constraint(chine_parameter, target)
+        if self.template is SectionTemplate.SONAR_DOME:
+            dome = sonar_dome_parameters
+            if dome is None:  # pragma: no cover - validated above
+                raise RuntimeError("sonar-dome parameters are missing.")
+            self.problem.add_point_constraint(
+                dome.maximum_breadth_parameter,
+                _vector2(-dome.maximum_breadth_height, dome.maximum_half_breadth),
+            )
+            self.problem.add_tangent_angle_constraint(
+                dome.maximum_breadth_parameter,
+                dome.maximum_breadth_tangent_angle,
+            )
+            self.problem.add_point_constraint(
+                dome.attachment_parameter,
+                _vector2(-dome.attachment_height, dome.attachment_half_breadth),
+            )
+            if dome.attachment_tangent_angle is not None:
+                self.problem.add_tangent_angle_constraint(
+                    dome.attachment_parameter,
+                    dome.attachment_tangent_angle,
+                )
         self.problem.add_area_constraint(half_area)
 
     def assemble(

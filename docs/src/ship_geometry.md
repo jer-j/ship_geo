@@ -117,6 +117,35 @@ Pointed bow and stern sections are explicit collapsed centerplane curves
 derived from the nearest interior section. Hard chines use an interior knot of
 multiplicity equal to the spline degree, producing a $C^0$ join.
 
+## Surface-combatant curve network
+
+The one-patch generator follows the three-stage dependency network described
+in [Sener's surface-combatant parameterization](http://www.iraj.in/journal/journal_file/journal_pdf/2-324-1485753451125-129.pdf):
+
+1. longitudinal basic curves define the hull outline;
+2. control curves provide tangent and fullness data to design sections;
+3. compatible design sections generate one meta-surface.
+
+`HullCurveNetwork` names the basic CPC, DECK, DWL, FOB, ASC, and sectional-area
+roles and the entrance-angle, DWL-tangent, deck-tangent, keel-tangent, and
+sectional-fullness controls. The current underwater generator evaluates CPC,
+DWL, sectional area, keel tangent, DWL tangent, entrance slope, and fullness.
+The remaining roles are explicit extension points rather than implicit ad hoc
+arrays.
+
+DTMB 5415's dome transition is represented inside one cubic longitudinal
+space. If a feature location $v_f$ has knot multiplicity $m$, the internal
+continuity is
+
+$$
+C^{p-m}.
+$$
+
+The default cubic surface repeats each transition knot twice, giving $C^1$
+continuity while retaining a single control net. The remaining interpolation
+knots are selected from parameter-averaged candidates by a rank and condition
+check, which prevents a nominally valid but singular section interpolation.
+
 ## Naval form-parameter hierarchy
 
 `FormParameterHullProblem` implements the MIT-style separation between primary

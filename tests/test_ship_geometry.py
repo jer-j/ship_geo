@@ -5,6 +5,7 @@ import lsdo_function_spaces as lfs
 import numpy as np
 
 from lsdo_geo import (
+    BasicCurveName,
     ClosedSurface,
     CompatibleLoft,
     FormCurveKind,
@@ -18,6 +19,7 @@ from lsdo_geo import (
     SectionLoftProblem,
     SectionProblem,
     SectionTemplate,
+    SonarDomeSectionParameters,
     VariationalSystem,
     bilinear_patch,
     compute_closed_surface_hydrostatics,
@@ -27,6 +29,7 @@ from lsdo_geo import (
     evaluate_watertight_mesh,
     export_ascii_stl,
     export_obj,
+    feature_aligned_interpolation_knots,
     recommended_refinement_knots,
     rectangular_box_surface,
     refine_surface,
@@ -91,6 +94,52 @@ def test_compatible_loft_interpolates_nonuniform_section_stations():
     recorder.stop()
 
 
+def test_feature_aligned_knots_create_one_c1_surface_and_interpolate_sections():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    stations = np.array(
+        [0.0, 0.04, 0.08, 0.12, 0.15, 0.20, 0.30, 0.45, 0.60, 0.75, 0.90, 1.0]
+    )
+    features = np.array([0.12, 0.20])
+    knots = feature_aligned_interpolation_knots(stations, 3, features, continuity=1)
+    for feature in features:
+        assert np.count_nonzero(np.isclose(knots, feature)) == 2
+
+    space = lfs.BSplineSpace(
+        num_parametric_dimensions=1,
+        degree=(3,),
+        coefficients_shape=(4,),
+    )
+    sections = []
+    for index, station in enumerate(stations):
+        coefficients = np.column_stack(
+            (np.linspace(-1.0, 0.0, 4), station * np.linspace(0.0, 1.0, 4))
+        )
+        sections.append(
+            FSplineCurve(
+                lfs.Function(
+                    space,
+                    csdl.Variable(value=coefficients),
+                    name=f"feature_section_{index}",
+                )
+            )
+        )
+    surface = CompatibleLoft.create(
+        sections,
+        stations,
+        stations,
+        longitudinal_knots=knots,
+        name="feature_aligned_single_patch",
+    )
+    assert surface.function.space.coefficients_shape == (4, 12)
+    for section, station in zip(sections, stations):
+        coordinates = np.column_stack((np.linspace(0.0, 1.0, 5), np.full(5, station)))
+        values = surface.evaluate(coordinates).value
+        expected = section.evaluate(np.linspace(0.0, 1.0, 5)).value
+        np.testing.assert_allclose(values[:, 1:], expected[:, [1, 0]], atol=2e-12)
+    recorder.stop()
+
+
 def test_form_parameter_hull_preserves_primary_naval_parameters():
     recorder = csdl.Recorder(inline=True)
     recorder.start()
@@ -122,7 +171,10 @@ def test_form_parameter_hull_preserves_primary_naval_parameters():
         name="naval_parameter_test",
     ).solve(max_iter=30)
     recovered = geometry.recovered_primary_parameters()
+    controls = geometry.curve_network.evaluate_section_controls([0.5], 10.0)
 
+    assert BasicCurveName.DESIGN_WATERLINE in geometry.curve_network.basic_curves
+    np.testing.assert_allclose(controls.half_breadths.value, [2.0], atol=2e-11)
     np.testing.assert_allclose(recovered["beam"].value, [4.0], atol=2e-11)
     np.testing.assert_allclose(recovered["draft"].value, [2.0], atol=2e-11)
     np.testing.assert_allclose(recovered["displacement"].value, [50.0], atol=2e-10)
@@ -373,6 +425,44 @@ def test_hard_chine_uses_repeated_knot_and_preserves_chine_point():
     knots = curve.space.knots[curve.space.knot_indices[0]]
     assert np.count_nonzero(np.isclose(knots, 0.5)) == 3
     assert np.max(np.abs(curve.constraint_residual.value)) < 1e-9
+    recorder.stop()
+
+
+def test_sonar_dome_section_preserves_component_variables_and_derivative():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+
+    dome_breadth = csdl.Variable(value=0.12, name="dome_half_breadth")
+    system = VariationalSystem("sonar_dome")
+    problem = SectionProblem(
+        station_parameter=0.05,
+        draft=0.25,
+        half_breadth=0.045,
+        half_area=0.018,
+        keel_tangent_angle=np.pi / 2.0,
+        waterline_tangent_angle=0.2,
+        template=SectionTemplate.SONAR_DOME,
+        sonar_dome_parameters=SonarDomeSectionParameters(
+            depth=0.36,
+            maximum_breadth_parameter=0.30,
+            maximum_breadth_height=0.30,
+            maximum_half_breadth=dome_breadth,
+            attachment_parameter=0.70,
+            attachment_height=0.15,
+            attachment_half_breadth=0.02,
+        ),
+        num_control_points=10,
+        fairness_weights={2: 1.0e-4},
+    )
+    curve = problem.assemble(system).finalize(system.solve(max_iter=30))
+
+    np.testing.assert_allclose(curve.evaluate(0.0).value, [-0.36, 0.0], atol=2e-11)
+    np.testing.assert_allclose(curve.evaluate(0.30).value, [-0.30, 0.12], atol=2e-11)
+    np.testing.assert_allclose(curve.evaluate(0.70).value, [-0.15, 0.02], atol=2e-11)
+    np.testing.assert_allclose(curve.evaluate(1.0).value, [0.0, 0.045], atol=2e-11)
+    breadth_derivative = csdl.derivative(curve.evaluate(0.30)[1], dome_breadth)
+    np.testing.assert_allclose(breadth_derivative.value, [[1.0]], atol=2e-9)
+    assert np.max(np.abs(curve.constraint_residual.value)) < 2e-10
     recorder.stop()
 
 

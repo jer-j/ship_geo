@@ -18,6 +18,11 @@ import numpy.typing as npt
 
 from lsdo_geo.core.splines.variational import VariationalResult, VariationalSystem
 
+from .curve_network import (
+    BasicCurveName,
+    ControlCurveName,
+    HullCurveNetwork,
+)
 from .form_curves import (
     FormCurve,
     FormCurveAssembly,
@@ -25,6 +30,7 @@ from .form_curves import (
     FormCurveProblem,
 )
 from .hull import HullGeometry, SectionLoftAssembly, SectionLoftProblem
+from .sections import SectionTemplate, SonarDomeSectionParameters
 from .surfaces import LongitudinalLoftRegion
 
 
@@ -139,6 +145,7 @@ class FormParameterHullGeometry:
     draft_curve: FormCurve
     deadrise_curve: FormCurve
     flare_curve: FormCurve
+    curve_network: HullCurveNetwork
     primary_parameters: NavalHullParameters
     maximum_beam_parameter: float
     maximum_draft_parameter: float
@@ -170,6 +177,7 @@ class FormParameterHullAssembly:
     primary_parameters: NavalHullParameters
     maximum_beam_parameter: float
     maximum_draft_parameter: float
+    curve_network: HullCurveNetwork
 
     def finalize(self, result: VariationalResult) -> FormParameterHullGeometry:
         """Attach shared KKT diagnostics to every solved geometry component."""
@@ -184,6 +192,7 @@ class FormParameterHullAssembly:
             draft_curve=curves[FormCurveKind.KEEL_PROFILE],
             deadrise_curve=curves[FormCurveKind.DEADRISE],
             flare_curve=curves[FormCurveKind.FLARE],
+            curve_network=self.curve_network,
             primary_parameters=self.primary_parameters,
             maximum_beam_parameter=self.maximum_beam_parameter,
             maximum_draft_parameter=self.maximum_draft_parameter,
@@ -210,10 +219,15 @@ class FormParameterHullProblem:
         section_fit_parameters: npt.ArrayLike | None = None,
         section_fit_points: Any | None = None,
         section_fit_weight: float = 0.0,
+        section_templates: Sequence[SectionTemplate] | None = None,
+        sonar_dome_parameters: Sequence[SonarDomeSectionParameters | None]
+        | None = None,
         form_fit_weight: float = 1.0,
         form_fairness_weight: float = 1.0e-4,
         x_origin: Any = 0.0,
         longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
+        longitudinal_feature_parameters: npt.ArrayLike | None = None,
+        longitudinal_feature_continuity: int = 1,
         name: str = "form_parameter_hull",
     ) -> None:
         primary_parameters.validate_current_values()
@@ -244,12 +258,16 @@ class FormParameterHullProblem:
         self.section_fit_parameters = section_fit_parameters
         self.section_fit_points = section_fit_points
         self.section_fit_weight = float(section_fit_weight)
+        self.section_templates = section_templates
+        self.sonar_dome_parameters = sonar_dome_parameters
         self.form_fit_weight = float(form_fit_weight)
         self.form_fairness_weight = float(form_fairness_weight)
         self.x_origin = x_origin
         self.longitudinal_regions = (
             None if longitudinal_regions is None else tuple(longitudinal_regions)
         )
+        self.longitudinal_feature_parameters = longitudinal_feature_parameters
+        self.longitudinal_feature_continuity = int(longitudinal_feature_continuity)
         self.name = name
 
     def solve(
@@ -348,34 +366,43 @@ class FormParameterHullProblem:
             system.add_objective(self.form_fit_weight * csdl.sum(residual**2))
 
         curves = {kind: assembly.curve for kind, assembly in assemblies.items()}
+        curve_network = HullCurveNetwork(
+            basic_curves={
+                BasicCurveName.CENTRAL_PROFILE: curves[FormCurveKind.KEEL_PROFILE],
+                BasicCurveName.DESIGN_WATERLINE: curves[
+                    FormCurveKind.WATERLINE_HALF_BREADTH
+                ],
+                BasicCurveName.SECTIONAL_AREA: curves[FormCurveKind.SECTIONAL_AREA],
+            },
+            control_curves={
+                ControlCurveName.TANGENT_AT_DESIGN_WATERLINE: curves[
+                    FormCurveKind.FLARE
+                ],
+                ControlCurveName.TANGENT_AT_KEEL: curves[FormCurveKind.DEADRISE],
+            },
+        )
+        section_controls = curve_network.evaluate_section_controls(
+            section_stations, length
+        )
         section_problem = SectionLoftProblem(
             length=length,
             station_parameters=section_stations,
-            drafts=curves[FormCurveKind.KEEL_PROFILE]
-            .evaluate(section_stations)
-            .reshape((section_stations.size,)),
-            half_breadths=curves[FormCurveKind.WATERLINE_HALF_BREADTH]
-            .evaluate(section_stations)
-            .reshape((section_stations.size,)),
-            half_areas=curves[FormCurveKind.SECTIONAL_AREA]
-            .evaluate(section_stations)
-            .reshape((section_stations.size,)),
-            keel_tangent_angles=(
-                0.5 * np.pi
-                - curves[FormCurveKind.DEADRISE]
-                .evaluate(section_stations)
-                .reshape((section_stations.size,))
-            ),
-            waterline_tangent_angles=curves[FormCurveKind.FLARE]
-            .evaluate(section_stations)
-            .reshape((section_stations.size,)),
+            drafts=section_controls.depths,
+            half_breadths=section_controls.half_breadths,
+            half_areas=section_controls.half_areas,
+            keel_tangent_angles=section_controls.keel_tangent_angles,
+            waterline_tangent_angles=section_controls.waterline_tangent_angles,
             num_section_control_points=self.num_section_control_points,
             pointed_ends=(True, section_stations[-1] < 1.0),
             x_origin=self.x_origin,
             section_fit_parameters=self.section_fit_parameters,
             section_fit_points=self.section_fit_points,
             section_fit_weight=self.section_fit_weight,
+            section_templates=self.section_templates,
+            sonar_dome_parameters=self.sonar_dome_parameters,
             longitudinal_regions=self.longitudinal_regions,
+            longitudinal_feature_parameters=self.longitudinal_feature_parameters,
+            longitudinal_feature_continuity=self.longitudinal_feature_continuity,
             name=self.name,
         )
         section_assembly = section_problem.assemble(system)
@@ -385,6 +412,7 @@ class FormParameterHullProblem:
             primary_parameters=self.primary,
             maximum_beam_parameter=self.targets.maximum_beam_parameter,
             maximum_draft_parameter=self.targets.maximum_draft_parameter,
+            curve_network=curve_network,
         )
 
     def _problem(self, kind: FormCurveKind) -> FormCurveProblem:

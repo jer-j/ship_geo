@@ -20,7 +20,13 @@ from ..core.ship_geometry.form_parameter_hull import (
     NavalHullParameters,
 )
 from ..core.ship_geometry.refinement import fit_offset_surface
+from ..core.ship_geometry.sections import (
+    SectionTemplate,
+    SonarDomeSectionParameters,
+    collapsed_section,
+)
 from ..core.ship_geometry.surfaces import (
+    CompatibleLoft,
     LongitudinalLoftRegion,
     TensorProductSurface,
 )
@@ -153,6 +159,7 @@ class DTMB5415FormCalibration:
     single_patch_validation_section_rms_error: float
     single_patch_validation_section_maximum_error: float
     maximum_regional_boundary_gap: float
+    longitudinal_regions: tuple[LongitudinalLoftRegion, ...]
 
 
 _FIT_LEVELS: dict[str, dict[DTMB5415Region, tuple[int, int]]] = {
@@ -604,6 +611,69 @@ def dtmb_5415_longitudinal_regions(
     )
 
 
+def dtmb_5415_section_templates(
+    section_data: DTMB5415SectionFitData,
+) -> tuple[
+    tuple[SectionTemplate, ...],
+    tuple[SonarDomeSectionParameters | None, ...],
+]:
+    """Build component-aware section topology from canonical observations.
+
+    The first local breadth maximum identifies the sonar-dome lobe. The first
+    local minimum that follows identifies its attachment neck. Their normalized
+    arc-length locations are fixed representation data, while their dimensional
+    ordinates enter the section problem as differentiable auxiliary variables.
+    """
+    parameters = section_data.curve_parameters
+    templates: list[SectionTemplate] = []
+    dome_parameters: list[SonarDomeSectionParameters | None] = []
+    for region, points in zip(section_data.station_regions, section_data.points):
+        if region is not DTMB5415Region.SONAR_DOME:
+            templates.append(SectionTemplate.ROUND_BILGE)
+            dome_parameters.append(None)
+            continue
+        breadths = points[:, 1]
+        maxima = (
+            np.flatnonzero(
+                (breadths[1:-1] > breadths[:-2]) & (breadths[1:-1] >= breadths[2:])
+            )
+            + 1
+        )
+        if maxima.size == 0:
+            templates.append(SectionTemplate.ROUND_BILGE)
+            dome_parameters.append(None)
+            continue
+        maximum_index = int(maxima[0])
+        minima = (
+            np.flatnonzero(
+                (breadths[maximum_index + 1 : -1] <= breadths[maximum_index:-2])
+                & (breadths[maximum_index + 1 : -1] < breadths[maximum_index + 2 :])
+            )
+            + maximum_index
+            + 1
+        )
+        if minima.size == 0:
+            templates.append(SectionTemplate.ROUND_BILGE)
+            dome_parameters.append(None)
+            continue
+        attachment_index = int(minima[0])
+        templates.append(SectionTemplate.SONAR_DOME)
+        dome_parameters.append(
+            SonarDomeSectionParameters(
+                depth=-points[0, 0],
+                maximum_breadth_parameter=float(parameters[maximum_index]),
+                maximum_breadth_height=-points[maximum_index, 0],
+                maximum_half_breadth=points[maximum_index, 1],
+                attachment_parameter=float(parameters[attachment_index]),
+                attachment_height=-points[attachment_index, 0],
+                attachment_half_breadth=points[attachment_index, 1],
+                maximum_breadth_tangent_angle=0.0,
+                attachment_tangent_angle=None,
+            )
+        )
+    return tuple(templates), tuple(dome_parameters)
+
+
 def calibrate_dtmb_5415_form_hull(
     reference: DTMB5415Reference,
     section_station_parameters: npt.ArrayLike | None = None,
@@ -650,6 +720,7 @@ def calibrate_dtmb_5415_form_hull(
     section_data = extract_dtmb_5415_section_fit_data(
         reference, section_station_parameters
     )
+    section_templates, sonar_dome_parameters = dtmb_5415_section_templates(section_data)
     geometry = FormParameterHullProblem(
         form_data.primary_parameters,
         form_data.fit_targets,
@@ -659,9 +730,12 @@ def calibrate_dtmb_5415_form_hull(
         section_fit_parameters=section_data.curve_parameters,
         section_fit_points=section_data.points,
         section_fit_weight=section_fit_weight,
+        section_templates=section_templates,
+        sonar_dome_parameters=sonar_dome_parameters,
         form_fit_weight=form_fit_weight,
         x_origin=form_data.coordinate_origin,
-        longitudinal_regions=regions,
+        longitudinal_feature_parameters=(regions[0].end, regions[1].end),
+        longitudinal_feature_continuity=1,
         name="dtmb_5415_form_calibration",
     ).solve(tolerance=tolerance, max_iter=max_iter, print_status=print_status)
 
@@ -701,45 +775,48 @@ def calibrate_dtmb_5415_form_hull(
         residual = np.asarray(curve.evaluate(fit_stations).value).reshape(-1) - targets
         auxiliary_errors[name] = float(np.sqrt(np.mean(residual**2)))
 
-    def section_errors(data: DTMB5415SectionFitData, regional: bool) -> np.ndarray:
+    def section_errors(
+        data: DTMB5415SectionFitData,
+        surface: TensorProductSurface,
+    ) -> np.ndarray:
         surface_points = []
         for station in data.station_parameters:
-            if regional:
-                regional_surface = geometry.hull.regional_surface
-                if regional_surface is None:
-                    raise RuntimeError("regional DTMB calibration surface is missing.")
-                values = np.asarray(
-                    regional_surface.evaluate_section(
-                        float(station), data.curve_parameters
-                    ).value
+            parameters = np.column_stack(
+                (
+                    data.curve_parameters,
+                    np.full(data.curve_parameters.size, station),
                 )
-            else:
-                parameters = np.column_stack(
-                    (
-                        data.curve_parameters,
-                        np.full(data.curve_parameters.size, station),
-                    )
-                )
-                values = np.asarray(geometry.hull.surface.evaluate(parameters).value)
+            )
+            values = np.asarray(surface.evaluate(parameters).value)
             surface_points.append(values[:, [2, 1]])
         residual = np.asarray(surface_points) - data.points
         return np.linalg.norm(residual, axis=2)
 
-    fitting_distances = section_errors(section_data, regional=True)
+    fitting_distances = section_errors(section_data, geometry.hull.surface)
     validation_data = extract_dtmb_5415_section_fit_data(
         reference,
         validation_station_parameters,
         num_curve_points=section_data.curve_parameters.size,
     )
-    validation_distances = section_errors(validation_data, regional=True)
-    single_patch_distances = section_errors(validation_data, regional=False)
-    regional_surface = geometry.hull.regional_surface
-    if regional_surface is None:
-        raise RuntimeError("regional DTMB calibration surface is missing.")
-    maximum_boundary_gap = max(
-        float(np.max(np.abs(gap.value)))
-        for gap in regional_surface.boundary_gaps().values()
+    validation_distances = section_errors(validation_data, geometry.hull.surface)
+    baseline_sections = list(geometry.hull.sections)
+    baseline_sections.insert(
+        0, collapsed_section(baseline_sections[0], "dtmb_5415_baseline_bow")
     )
+    baseline_parameters = np.concatenate(([0.0], section_data.station_parameters))
+    baseline_x = [
+        form_data.coordinate_origin
+        + float(form_data.primary_parameters.length_between_perpendiculars)
+        * (parameter - 0.5)
+        for parameter in baseline_parameters
+    ]
+    baseline_surface = CompatibleLoft.create(
+        baseline_sections,
+        baseline_parameters,
+        baseline_x,
+        name="dtmb_5415_smooth_knot_baseline",
+    )
+    single_patch_distances = section_errors(validation_data, baseline_surface)
     return DTMB5415FormCalibration(
         geometry=geometry,
         form_data=form_data,
@@ -761,7 +838,8 @@ def calibrate_dtmb_5415_form_hull(
         single_patch_validation_section_maximum_error=float(
             np.max(single_patch_distances)
         ),
-        maximum_regional_boundary_gap=maximum_boundary_gap,
+        maximum_regional_boundary_gap=0.0,
+        longitudinal_regions=regions,
     )
 
 

@@ -9,6 +9,12 @@ from .closed_surface import (
     mirror_surface_y,
     rectangular_box_surface,
 )
+from .curve_network import (
+    BasicCurveName,
+    ControlCurveName,
+    HullCurveNetwork,
+    SectionControlValues,
+)
 from .diagnostics import (
     ClosureReport,
     curve_span_error_indicators,
@@ -51,6 +57,7 @@ from .sections import (
     SectionAssembly,
     SectionProblem,
     SectionTemplate,
+    SonarDomeSectionParameters,
     collapsed_section,
 )
 from .surfaces import (
@@ -60,14 +67,17 @@ from .surfaces import (
     PatchGraph,
     RegionalCompatibleLoft,
     TensorProductSurface,
+    feature_aligned_interpolation_knots,
     wigley_surface,
 )
 from .validity import SurfaceValidity, evaluate_surface_validity
 
 __all__ = [
+    "BasicCurveName",
     "ClosedSurface",
     "ClosureReport",
     "CompatibleLoft",
+    "ControlCurveName",
     "FSurfaceAssembly",
     "FSurfaceProblem",
     "FormCurve",
@@ -77,6 +87,7 @@ __all__ = [
     "FormParameterHullAssembly",
     "FormParameterHullGeometry",
     "FormParameterHullProblem",
+    "HullCurveNetwork",
     "HullGeometry",
     "Hydrostatics",
     "LongitudinalFitTargets",
@@ -87,10 +98,12 @@ __all__ = [
     "PatchGraph",
     "RegionalCompatibleLoft",
     "SectionAssembly",
+    "SectionControlValues",
     "SectionLoftAssembly",
     "SectionLoftProblem",
     "SectionProblem",
     "SectionTemplate",
+    "SonarDomeSectionParameters",
     "SurfaceMesh",
     "SurfaceValidity",
     "TensorProductSurface",
@@ -108,6 +121,7 @@ __all__ = [
     "evaluate_watertight_mesh",
     "export_ascii_stl",
     "export_obj",
+    "feature_aligned_interpolation_knots",
     "fit_offset_surface",
     "mirror_surface_y",
     "recommended_refinement_knots",

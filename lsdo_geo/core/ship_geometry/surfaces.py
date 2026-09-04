@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from itertools import pairwise
+from itertools import combinations, pairwise
+from math import comb
 from typing import Any, Literal
 
 import csdl_alpha as csdl
@@ -42,6 +43,78 @@ def _averaged_interpolation_knots(parameters: np.ndarray, degree: int) -> np.nda
     return np.concatenate(
         (np.zeros(degree + 1), np.asarray(interior), np.ones(degree + 1))
     )
+
+
+def feature_aligned_interpolation_knots(
+    parameters: npt.ArrayLike,
+    degree: int,
+    feature_parameters: npt.ArrayLike,
+    continuity: int = 1,
+) -> np.ndarray:
+    """Create one-patch interpolation knots aligned to longitudinal features.
+
+    A feature knot of multiplicity ``degree - continuity`` gives the requested
+    internal :math:`C^k` continuity without splitting the surface into patches.
+    Remaining interior knots are selected from the standard parameter-averaged
+    knot vector to retain a well-distributed interpolation space.
+    """
+    stations = np.asarray(parameters, dtype=float).reshape(-1)
+    features = np.asarray(feature_parameters, dtype=float).reshape(-1)
+    if stations.size <= degree:
+        raise ValueError("the station count must exceed the degree.")
+    if np.any(np.diff(stations) <= 0.0) or np.any((stations < 0.0) | (stations > 1.0)):
+        raise ValueError("parameters must increase in [0, 1].")
+    if np.any(np.diff(features) <= 0.0) or np.any(
+        (features <= 0.0) | (features >= 1.0)
+    ):
+        raise ValueError("feature_parameters must increase inside (0, 1).")
+    if continuity < 0 or continuity >= degree:
+        raise ValueError("continuity must satisfy 0 <= continuity < degree.")
+    interior_count = stations.size - degree - 1
+    multiplicity = degree - continuity
+    required_count = features.size * multiplicity
+    if required_count > interior_count:
+        raise ValueError("too many feature knots for the interpolation space.")
+
+    averaged = _averaged_interpolation_knots(stations, degree)
+    candidates = np.unique(averaged[degree + 1 : -degree - 1])
+    retained_count = interior_count - required_count
+    if comb(candidates.size, retained_count) > 10_000:
+        candidate_sets = (
+            tuple(candidates[index] for index in indices)
+            for indices in (
+                np.linspace(0, candidates.size - 1, retained_count, dtype=int),
+            )
+        )
+    else:
+        candidate_sets = combinations(candidates, retained_count)
+
+    best_knots = None
+    best_condition = np.inf
+    for retained in candidate_sets:
+        interior = np.sort(
+            np.concatenate((np.repeat(features, multiplicity), np.asarray(retained)))
+        )
+        knots = np.concatenate((np.zeros(degree + 1), interior, np.ones(degree + 1)))
+        space = lfs.BSplineSpace(
+            num_parametric_dimensions=1,
+            degree=(degree,),
+            coefficients_shape=(stations.size,),
+            knots=knots,
+        )
+        basis = space.compute_basis_matrix(stations[:, None]).toarray()
+        if np.linalg.matrix_rank(basis) != stations.size:
+            continue
+        condition = float(np.linalg.cond(basis))
+        if condition < best_condition:
+            best_knots = knots
+            best_condition = condition
+    if best_knots is None:
+        raise ValueError(
+            "feature knots do not admit a full-rank interpolation at the "
+            "supplied section parameters."
+        )
+    return best_knots
 
 
 @dataclass

@@ -20,6 +20,7 @@ from .sections import (
     SectionAssembly,
     SectionProblem,
     SectionTemplate,
+    SonarDomeSectionParameters,
     collapsed_section,
 )
 from .surfaces import (
@@ -27,6 +28,7 @@ from .surfaces import (
     LongitudinalLoftRegion,
     RegionalCompatibleLoft,
     TensorProductSurface,
+    feature_aligned_interpolation_knots,
 )
 from .validity import SurfaceValidity, evaluate_surface_validity
 
@@ -126,6 +128,9 @@ class SectionLoftProblem:
         half_areas: Sequence[Any] | csdl.Variable,
         keel_tangent_angles: Sequence[Any] | csdl.Variable | None = None,
         waterline_tangent_angles: Sequence[Any] | csdl.Variable | None = None,
+        section_templates: Sequence[SectionTemplate] | None = None,
+        sonar_dome_parameters: Sequence[SonarDomeSectionParameters | None]
+        | None = None,
         num_section_control_points: int = 8,
         section_degree: int = 3,
         longitudinal_degree: int = 3,
@@ -143,6 +148,8 @@ class SectionLoftProblem:
         section_fit_points: Any | None = None,
         section_fit_weight: float = 0.0,
         longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
+        longitudinal_feature_parameters: npt.ArrayLike | None = None,
+        longitudinal_feature_continuity: int = 1,
         name: str = "hull_geometry",
     ) -> None:
         parameters = np.asarray(station_parameters, dtype=float).reshape(-1)
@@ -171,6 +178,21 @@ class SectionLoftProblem:
         ):
             if _sequence_length(values) != parameters.size:
                 raise ValueError(f"{label} must match station_parameters.")
+        if section_templates is None:
+            section_templates = (SectionTemplate.ROUND_BILGE,) * parameters.size
+        if len(section_templates) != parameters.size:
+            raise ValueError("section_templates must match station_parameters.")
+        templates = tuple(SectionTemplate(template) for template in section_templates)
+        if sonar_dome_parameters is None:
+            sonar_dome_parameters = (None,) * parameters.size
+        if len(sonar_dome_parameters) != parameters.size:
+            raise ValueError("sonar_dome_parameters must match station_parameters.")
+        for template, dome in zip(templates, sonar_dome_parameters):
+            if (template is SectionTemplate.SONAR_DOME) != (dome is not None):
+                raise ValueError(
+                    "each sonar-dome template requires matching dome parameters, "
+                    "and other templates must use None."
+                )
         if keel_tangent_angles is None:
             keel_tangent_angles = np.zeros(parameters.size)
         if waterline_tangent_angles is None:
@@ -196,6 +218,8 @@ class SectionLoftProblem:
         self.half_areas = half_areas
         self.keel_tangent_angles = keel_tangent_angles
         self.waterline_tangent_angles = waterline_tangent_angles
+        self.section_templates = templates
+        self.sonar_dome_parameters = tuple(sonar_dome_parameters)
         self.num_section_control_points = int(num_section_control_points)
         self.section_degree = int(section_degree)
         self.longitudinal_degree = int(longitudinal_degree)
@@ -244,6 +268,12 @@ class SectionLoftProblem:
         self.longitudinal_regions = (
             None if longitudinal_regions is None else tuple(longitudinal_regions)
         )
+        self.longitudinal_feature_parameters = (
+            None
+            if longitudinal_feature_parameters is None
+            else np.asarray(longitudinal_feature_parameters, dtype=float).reshape(-1)
+        )
+        self.longitudinal_feature_continuity = int(longitudinal_feature_continuity)
         self.name = name
 
     def solve(
@@ -276,7 +306,8 @@ class SectionLoftProblem:
                 waterline_tangent_angle=_sequence_item(
                     self.waterline_tangent_angles, index
                 ),
-                template=SectionTemplate.ROUND_BILGE,
+                template=self.section_templates[index],
+                sonar_dome_parameters=self.sonar_dome_parameters[index],
                 num_control_points=self.num_section_control_points,
                 degree=self.section_degree,
                 fairness_weights=self.section_fairness_weights,
@@ -311,11 +342,20 @@ class SectionLoftProblem:
         ]
         surface_assembly: FSurfaceAssembly | None = None
         if self.surface_formulation == "compatible_loft":
+            longitudinal_knots = None
+            if self.longitudinal_feature_parameters is not None:
+                longitudinal_knots = feature_aligned_interpolation_knots(
+                    loft_parameters,
+                    self.longitudinal_degree,
+                    self.longitudinal_feature_parameters,
+                    self.longitudinal_feature_continuity,
+                )
             surface = CompatibleLoft.create(
                 sections=loft_sections,
                 station_parameters=loft_parameters,
                 x_coordinates=x_coordinates,
                 longitudinal_degree=self.longitudinal_degree,
+                longitudinal_knots=longitudinal_knots,
                 name=f"{self.name}_surface",
             )
             if self.longitudinal_fairness_weight:
