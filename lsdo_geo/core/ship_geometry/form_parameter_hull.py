@@ -98,6 +98,9 @@ class LongitudinalFitTargets:
     flare_angles: Any
     maximum_beam_parameter: float
     maximum_draft_parameter: float
+    deck_half_breadths: Any | None = None
+    deck_heights: Any | None = None
+    deck_tangent_angles: Any | None = None
 
     def validated(self) -> LongitudinalFitTargets:
         """Return a normalized target object after deterministic checks."""
@@ -115,6 +118,18 @@ class LongitudinalFitTargets:
             if not 0.0 < float(value) <= 1.0:
                 raise ValueError(f"{name} must lie in (0, 1].")
         count = stations.size
+        deck_fields = (
+            self.deck_half_breadths,
+            self.deck_heights,
+            self.deck_tangent_angles,
+        )
+        if any(field is not None for field in deck_fields) and any(
+            field is None for field in deck_fields
+        ):
+            raise ValueError(
+                "deck_half_breadths, deck_heights, and deck_tangent_angles must be "
+                "supplied together."
+            )
         return LongitudinalFitTargets(
             station_parameters=stations,
             half_breadths=_sequence_values(self.half_breadths, count, "half_breadths"),
@@ -126,6 +141,25 @@ class LongitudinalFitTargets:
             flare_angles=_sequence_values(self.flare_angles, count, "flare_angles"),
             maximum_beam_parameter=float(self.maximum_beam_parameter),
             maximum_draft_parameter=float(self.maximum_draft_parameter),
+            deck_half_breadths=(
+                None
+                if self.deck_half_breadths is None
+                else _sequence_values(
+                    self.deck_half_breadths, count, "deck_half_breadths"
+                )
+            ),
+            deck_heights=(
+                None
+                if self.deck_heights is None
+                else _sequence_values(self.deck_heights, count, "deck_heights")
+            ),
+            deck_tangent_angles=(
+                None
+                if self.deck_tangent_angles is None
+                else _sequence_values(
+                    self.deck_tangent_angles, count, "deck_tangent_angles"
+                )
+            ),
         )
 
 
@@ -142,6 +176,10 @@ class FormParameterHullGeometry:
     primary_parameters: NavalHullParameters
     maximum_beam_parameter: float
     maximum_draft_parameter: float
+    fullness_curve: FormCurve | None = None
+    deck_edge_curve: FormCurve | None = None
+    deck_height_curve: FormCurve | None = None
+    deck_tangent_curve: FormCurve | None = None
 
     def recovered_primary_parameters(self) -> dict[str, csdl.Variable]:
         """Recover the exact naval particulars represented by the form curves."""
@@ -187,6 +225,10 @@ class FormParameterHullAssembly:
             primary_parameters=self.primary_parameters,
             maximum_beam_parameter=self.maximum_beam_parameter,
             maximum_draft_parameter=self.maximum_draft_parameter,
+            fullness_curve=curves.get(FormCurveKind.FULLNESS),
+            deck_edge_curve=curves.get(FormCurveKind.DECK_EDGE),
+            deck_height_curve=curves.get(FormCurveKind.DECK_HEIGHT),
+            deck_tangent_curve=curves.get(FormCurveKind.DECK_TANGENT),
         )
 
 
@@ -214,6 +256,7 @@ class FormParameterHullProblem:
         form_fairness_weight: float = 1.0e-4,
         x_origin: Any = 0.0,
         longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
+        use_fullness_curve: bool = False,
         name: str = "form_parameter_hull",
     ) -> None:
         primary_parameters.validate_current_values()
@@ -250,6 +293,8 @@ class FormParameterHullProblem:
         self.longitudinal_regions = (
             None if longitudinal_regions is None else tuple(longitudinal_regions)
         )
+        self.use_fullness_curve = bool(use_fullness_curve)
+        self.model_deck = targets.deck_half_breadths is not None
         self.name = name
 
     def solve(
@@ -316,6 +361,25 @@ class FormParameterHullProblem:
             FormCurveKind.DEADRISE: self.targets.deadrise_angles,
             FormCurveKind.FLARE: self.targets.flare_angles,
         }
+        zero_at_bow_kinds = [
+            FormCurveKind.SECTIONAL_AREA,
+            FormCurveKind.WATERLINE_HALF_BREADTH,
+        ]
+        if self.model_deck:
+            deck_edge_problem = self._problem(FormCurveKind.DECK_EDGE)
+            deck_edge_problem.add_value_constraint(0.0, 0.0)
+            problems[FormCurveKind.DECK_EDGE] = deck_edge_problem
+            problems[FormCurveKind.DECK_HEIGHT] = self._problem(
+                FormCurveKind.DECK_HEIGHT
+            )
+            problems[FormCurveKind.DECK_TANGENT] = self._problem(
+                FormCurveKind.DECK_TANGENT
+            )
+            target_map[FormCurveKind.DECK_EDGE] = self.targets.deck_half_breadths
+            target_map[FormCurveKind.DECK_HEIGHT] = self.targets.deck_heights
+            target_map[FormCurveKind.DECK_TANGENT] = self.targets.deck_tangent_angles
+            zero_at_bow_kinds.append(FormCurveKind.DECK_EDGE)
+
         assemblies = {
             kind: problem.assemble(
                 system,
@@ -323,11 +387,7 @@ class FormParameterHullProblem:
                     problem,
                     fit_stations,
                     target_map[kind],
-                    zero_at_bow=kind
-                    in (
-                        FormCurveKind.SECTIONAL_AREA,
-                        FormCurveKind.WATERLINE_HALF_BREADTH,
-                    ),
+                    zero_at_bow=kind in zero_at_bow_kinds,
                 ),
             )
             for kind, problem in problems.items()
@@ -339,6 +399,9 @@ class FormParameterHullProblem:
             FormCurveKind.KEEL_PROFILE: 1.0 / _scalar_value(draft),
             FormCurveKind.DEADRISE: 1.0,
             FormCurveKind.FLARE: 1.0,
+            FormCurveKind.DECK_EDGE: 1.0 / _scalar_value(beam),
+            FormCurveKind.DECK_HEIGHT: 1.0 / _scalar_value(draft),
+            FormCurveKind.DECK_TANGENT: 1.0,
         }
         for kind, assembly in assemblies.items():
             residual = scales[kind] * (
@@ -348,6 +411,75 @@ class FormParameterHullProblem:
             system.add_objective(self.form_fit_weight * csdl.sum(residual**2))
 
         curves = {kind: assembly.curve for kind, assembly in assemblies.items()}
+
+        num_stations = section_stations.size
+        if self.use_fullness_curve:
+            fullness_problem = FormCurveProblem(
+                FormCurveKind.FULLNESS,
+                num_control_points=max(
+                    self.num_form_control_points, num_stations + 5
+                ),
+                fairness_weights={2: self.form_fairness_weight},
+                regularization=1.0e-12,
+                name=f"{self.name}_{FormCurveKind.FULLNESS.value}",
+            )
+            for station in section_stations:
+                station_value = float(station)
+                sac_value = curves[FormCurveKind.SECTIONAL_AREA].evaluate(
+                    station_value
+                ).reshape((1,))
+                breadth_value = curves[FormCurveKind.WATERLINE_HALF_BREADTH].evaluate(
+                    station_value
+                ).reshape((1,))
+                draft_value = curves[FormCurveKind.KEEL_PROFILE].evaluate(
+                    station_value
+                ).reshape((1,))
+                fullness_problem.add_value_constraint(
+                    station_value, sac_value / (breadth_value * draft_value)
+                )
+            fullness_assembly = fullness_problem.assemble(
+                system, np.full(fullness_problem.num_control_points, 0.7)
+            )
+            assemblies[FormCurveKind.FULLNESS] = fullness_assembly
+            curves[FormCurveKind.FULLNESS] = fullness_assembly.curve
+            half_areas_for_sections = (
+                fullness_assembly.curve.evaluate(section_stations).reshape(
+                    (num_stations,)
+                )
+                * curves[FormCurveKind.WATERLINE_HALF_BREADTH]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+                * curves[FormCurveKind.KEEL_PROFILE]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+            )
+        else:
+            half_areas_for_sections = (
+                curves[FormCurveKind.SECTIONAL_AREA]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+            )
+
+        deck_heights_for_sections = None
+        deck_half_breadths_for_sections = None
+        deck_tangent_angles_for_sections = None
+        if self.model_deck:
+            deck_heights_for_sections = (
+                curves[FormCurveKind.DECK_HEIGHT]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+            )
+            deck_half_breadths_for_sections = (
+                curves[FormCurveKind.DECK_EDGE]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+            )
+            deck_tangent_angles_for_sections = (
+                curves[FormCurveKind.DECK_TANGENT]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+            )
+
         section_problem = SectionLoftProblem(
             length=length,
             station_parameters=section_stations,
@@ -357,9 +489,7 @@ class FormParameterHullProblem:
             half_breadths=curves[FormCurveKind.WATERLINE_HALF_BREADTH]
             .evaluate(section_stations)
             .reshape((section_stations.size,)),
-            half_areas=curves[FormCurveKind.SECTIONAL_AREA]
-            .evaluate(section_stations)
-            .reshape((section_stations.size,)),
+            half_areas=half_areas_for_sections,
             keel_tangent_angles=(
                 0.5 * np.pi
                 - curves[FormCurveKind.DEADRISE]
@@ -369,6 +499,9 @@ class FormParameterHullProblem:
             waterline_tangent_angles=curves[FormCurveKind.FLARE]
             .evaluate(section_stations)
             .reshape((section_stations.size,)),
+            deck_heights=deck_heights_for_sections,
+            deck_half_breadths=deck_half_breadths_for_sections,
+            deck_tangent_angles=deck_tangent_angles_for_sections,
             num_section_control_points=self.num_section_control_points,
             pointed_ends=(True, section_stations[-1] < 1.0),
             x_origin=self.x_origin,

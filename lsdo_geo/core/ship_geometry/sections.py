@@ -87,15 +87,24 @@ class SectionAssembly:
     station_parameter: float
     fspline: FSplineAssembly
     template: SectionTemplate
+    topside: FSplineAssembly | None = None
 
     @property
     def curve(self) -> FSplineCurve:
-        """Unsolved curve graph, usable for coupled surface assembly."""
+        """Unsolved underwater curve graph, usable for coupled surface assembly."""
         return self.fspline.curve
 
+    @property
+    def topside_curve(self) -> FSplineCurve | None:
+        """Unsolved freeboard curve graph, when deck data was supplied."""
+        return None if self.topside is None else self.topside.curve
+
     def finalize(self, result: VariationalResult) -> FSplineCurve:
-        """Attach global KKT diagnostics and return the solved curve."""
-        return self.fspline.finalize(result)
+        """Attach global KKT diagnostics and return the solved underwater curve."""
+        curve = self.fspline.finalize(result)
+        if self.topside is not None:
+            self.topside.finalize(result)
+        return curve
 
 
 class SectionProblem:
@@ -124,6 +133,12 @@ class SectionProblem:
         fit_parameters: Any | None = None,
         fit_points: Any | None = None,
         fit_weight: float = 0.0,
+        deck_height: Any | None = None,
+        deck_half_breadth: Any | None = None,
+        deck_tangent_angle: Any | None = None,
+        num_deck_control_points: int | None = None,
+        deck_degree: int | None = None,
+        deck_fairness_weights: dict[int, float] | None = None,
         name: str | None = None,
     ) -> None:
         if not 0.0 <= float(station_parameter) <= 1.0:
@@ -183,6 +198,37 @@ class SectionProblem:
             self.problem.add_point_constraint(chine_parameter, target)
         self.problem.add_area_constraint(half_area)
 
+        deck_given = (
+            deck_height is not None
+            or deck_half_breadth is not None
+            or deck_tangent_angle is not None
+        )
+        if deck_given and (
+            deck_height is None or deck_half_breadth is None or deck_tangent_angle is None
+        ):
+            raise ValueError(
+                "deck_height, deck_half_breadth, and deck_tangent_angle must be "
+                "supplied together."
+            )
+        self.deck_problem: FSplineProblem | None = None
+        if deck_given:
+            self.deck_problem = FSplineProblem(
+                num_control_points=num_deck_control_points or num_control_points,
+                degree=deck_degree or degree,
+                physical_dimension=2,
+                fairness_weights=deck_fairness_weights or fairness_weights,
+                quadrature_order=quadrature_order,
+                name=f"{self.name}_topside",
+            )
+            self.deck_problem.add_point_constraint(0.0, _vector2(0.0, half_breadth))
+            self.deck_problem.add_tangent_angle_constraint(
+                0.0, waterline_tangent_angle
+            )
+            self.deck_problem.add_point_constraint(
+                1.0, _vector2(deck_height, deck_half_breadth)
+            )
+            self.deck_problem.add_tangent_angle_constraint(1.0, deck_tangent_angle)
+
     def assemble(
         self,
         system: VariationalSystem,
@@ -201,10 +247,14 @@ class SectionProblem:
             initial_control_points = np.linalg.lstsq(basis, target_values, rcond=None)[
                 0
             ]
+        topside_assembly = (
+            None if self.deck_problem is None else self.deck_problem.assemble(system)
+        )
         assembly = SectionAssembly(
             station_parameter=self.station_parameter,
             fspline=self.problem.assemble(system, initial_control_points),
             template=self.template,
+            topside=topside_assembly,
         )
         if self.fit_parameters is not None and self.fit_weight:
             values = assembly.curve.evaluate(self.fit_parameters)

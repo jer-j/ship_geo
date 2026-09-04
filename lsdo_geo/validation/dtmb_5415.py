@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import urllib.request
 from dataclasses import dataclass
@@ -354,6 +355,21 @@ def _underwater_section_properties(points: np.ndarray) -> tuple[float, ...]:
     return float(y[-1]), float(-np.min(z)), half_area, deadrise, flare
 
 
+def _deck_section_properties(points: np.ndarray) -> tuple[float, float, float]:
+    """Measure the deck-edge half-breadth, height, and tangent angle.
+
+    The deck edge is the topmost row of the sampled transverse patch
+    parameterization, i.e. the modeled boundary of the hull face above the
+    waterline. The tangent angle uses the same ``atan2(dy, dz)`` convention as
+    :func:`_underwater_section_properties`'s flare measurement.
+    """
+    ordered = points[np.argsort(points[:, 2])]
+    deck = ordered[-1]
+    near_deck = ordered[-2]
+    tangent = float(np.arctan2(deck[1] - near_deck[1], deck[2] - near_deck[2]))
+    return float(deck[1]), float(deck[2]), tangent
+
+
 def _underwater_section_curve(points: np.ndarray) -> np.ndarray:
     """Return a keel-to-waterline polyline with an interpolated z=0 endpoint."""
     ordered = points[np.argsort(points[:, 2])]
@@ -427,7 +443,7 @@ def extract_dtmb_5415_form_data(
         return DTMB5415Region.MAIN_HULL
 
     def properties(parameters: np.ndarray) -> np.ndarray:
-        output = np.zeros((parameters.size, 5))
+        output = np.zeros((parameters.size, 8))
         for index, parameter in enumerate(parameters):
             x_coordinate = forward_perpendicular + length * float(parameter)
             region = region_at(x_coordinate)
@@ -438,7 +454,8 @@ def extract_dtmb_5415_form_data(
                 search_resolution,
                 transverse_resolution,
             )
-            output[index] = _underwater_section_properties(points)
+            output[index, :5] = _underwater_section_properties(points)
+            output[index, 5:] = _deck_section_properties(points)
         return output
 
     integration_parameters = np.linspace(0.005, 1.0, integration_station_count)
@@ -472,6 +489,9 @@ def extract_dtmb_5415_form_data(
         flare_angles=sampled[:, 4],
         maximum_beam_parameter=float(integration_parameters[maximum_beam_index]),
         maximum_draft_parameter=float(integration_parameters[maximum_draft_index]),
+        deck_half_breadths=sampled[:, 5],
+        deck_heights=sampled[:, 6],
+        deck_tangent_angles=sampled[:, 7],
     )
     return DTMB5415FormData(
         primary_parameters=NavalHullParameters(
@@ -626,9 +646,30 @@ def calibrate_dtmb_5415_form_hull(
     tolerance: float = 1.0e-10,
     max_iter: int = 50,
     print_status: bool = False,
+    include_deck: bool = False,
+    use_fullness_curve: bool = False,
 ) -> DTMB5415FormCalibration:
-    """Calibrate a naval-variable hull while preserving primary particulars."""
+    """Calibrate a naval-variable hull while preserving primary particulars.
+
+    ``include_deck`` additionally fits the deck-edge half-breadth, height, and
+    tangent-angle curves extracted from the reference geometry and extends
+    every section with a freeboard segment from the design waterline to the
+    deck, closing the segment used by Sener's Fig. 10 section construction.
+    ``use_fullness_curve`` replaces the direct sectional-area targeting of
+    each section with an explicit ``SectionFullness`` curve, matching the
+    ``Cross Section Area = ... * SectionFullness`` formula in the same figure.
+    """
     form_data = extract_dtmb_5415_form_data(reference)
+    if not include_deck:
+        form_data = dataclasses.replace(
+            form_data,
+            fit_targets=dataclasses.replace(
+                form_data.fit_targets,
+                deck_half_breadths=None,
+                deck_heights=None,
+                deck_tangent_angles=None,
+            ),
+        )
     regions = dtmb_5415_longitudinal_regions(reference, form_data)
     if section_station_parameters is None:
         transition_start = regions[0].end
@@ -662,6 +703,7 @@ def calibrate_dtmb_5415_form_hull(
         form_fit_weight=form_fit_weight,
         x_origin=form_data.coordinate_origin,
         longitudinal_regions=regions,
+        use_fullness_curve=use_fullness_curve,
         name="dtmb_5415_form_calibration",
     ).solve(tolerance=tolerance, max_iter=max_iter, print_status=print_status)
 

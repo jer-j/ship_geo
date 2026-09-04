@@ -61,6 +61,8 @@ class HullGeometry:
     validity: SurfaceValidity
     variational_result: VariationalResult
     regional_surface: RegionalCompatibleLoft | None = None
+    freeboard_surface: TensorProductSurface | None = None
+    freeboard_sections: tuple[FSplineCurve, ...] | None = None
 
 
 @dataclass
@@ -72,6 +74,7 @@ class SectionLoftAssembly:
     section_parameters: np.ndarray
     surface_assembly: FSurfaceAssembly | None = None
     regional_surface: RegionalCompatibleLoft | None = None
+    freeboard_surface: TensorProductSurface | None = None
 
     def finalize(
         self,
@@ -82,6 +85,11 @@ class SectionLoftAssembly:
         solved_sections = tuple(
             assembly.finalize(result) for assembly in self.section_assemblies
         )
+        freeboard_sections = None
+        if all(assembly.topside is not None for assembly in self.section_assemblies):
+            freeboard_sections = tuple(
+                assembly.topside_curve for assembly in self.section_assemblies
+            )
         surface = (
             self.surface
             if self.surface_assembly is None
@@ -100,6 +108,8 @@ class SectionLoftAssembly:
             validity=evaluate_surface_validity(surface),
             variational_result=result,
             regional_surface=self.regional_surface,
+            freeboard_surface=self.freeboard_surface,
+            freeboard_sections=freeboard_sections,
         )
 
 
@@ -126,6 +136,9 @@ class SectionLoftProblem:
         half_areas: Sequence[Any] | csdl.Variable,
         keel_tangent_angles: Sequence[Any] | csdl.Variable | None = None,
         waterline_tangent_angles: Sequence[Any] | csdl.Variable | None = None,
+        deck_heights: Sequence[Any] | csdl.Variable | None = None,
+        deck_half_breadths: Sequence[Any] | csdl.Variable | None = None,
+        deck_tangent_angles: Sequence[Any] | csdl.Variable | None = None,
         num_section_control_points: int = 8,
         section_degree: int = 3,
         longitudinal_degree: int = 3,
@@ -181,6 +194,21 @@ class SectionLoftProblem:
         ):
             if _sequence_length(values) != parameters.size:
                 raise ValueError(f"{label} must match station_parameters.")
+        deck_values = (deck_heights, deck_half_breadths, deck_tangent_angles)
+        if any(value is not None for value in deck_values) and any(
+            value is None for value in deck_values
+        ):
+            raise ValueError(
+                "deck_heights, deck_half_breadths, and deck_tangent_angles must be "
+                "supplied together."
+            )
+        for values, label in (
+            (deck_heights, "deck_heights"),
+            (deck_half_breadths, "deck_half_breadths"),
+            (deck_tangent_angles, "deck_tangent_angles"),
+        ):
+            if values is not None and _sequence_length(values) != parameters.size:
+                raise ValueError(f"{label} must match station_parameters.")
         if longitudinal_fairness_weight < 0.0:
             raise ValueError("longitudinal_fairness_weight must be nonnegative.")
         if surface_formulation not in ("compatible_loft", "variational"):
@@ -196,6 +224,9 @@ class SectionLoftProblem:
         self.half_areas = half_areas
         self.keel_tangent_angles = keel_tangent_angles
         self.waterline_tangent_angles = waterline_tangent_angles
+        self.deck_heights = deck_heights
+        self.deck_half_breadths = deck_half_breadths
+        self.deck_tangent_angles = deck_tangent_angles
         self.num_section_control_points = int(num_section_control_points)
         self.section_degree = int(section_degree)
         self.longitudinal_degree = int(longitudinal_degree)
@@ -265,6 +296,7 @@ class SectionLoftProblem:
 
     def assemble(self, system: VariationalSystem) -> SectionLoftAssembly:
         """Register every section and the hull surface without running Newton."""
+        model_deck = self.deck_heights is not None
         assemblies: list[SectionAssembly] = []
         for index, parameter in enumerate(self.parameters):
             problem = SectionProblem(
@@ -287,6 +319,19 @@ class SectionLoftProblem:
                     else self.section_fit_points[index]
                 ),
                 fit_weight=self.section_fit_weight,
+                deck_height=(
+                    _sequence_item(self.deck_heights, index) if model_deck else None
+                ),
+                deck_half_breadth=(
+                    _sequence_item(self.deck_half_breadths, index)
+                    if model_deck
+                    else None
+                ),
+                deck_tangent_angle=(
+                    _sequence_item(self.deck_tangent_angles, index)
+                    if model_deck
+                    else None
+                ),
                 name=f"{self.name}_section_{index}",
             )
             assemblies.append(problem.assemble(system))
@@ -342,12 +387,37 @@ class SectionLoftProblem:
                 name=f"{self.name}_regional_surface",
             )
 
+        freeboard_surface: TensorProductSurface | None = None
+        if model_deck:
+            freeboard_sections: list[FSplineCurve] = [
+                assembly.topside_curve for assembly in assemblies
+            ]
+            if pointed_bow:
+                freeboard_sections.insert(
+                    0,
+                    collapsed_section(freeboard_sections[0], f"{self.name}_bow_deck"),
+                )
+            if pointed_stern:
+                freeboard_sections.append(
+                    collapsed_section(
+                        freeboard_sections[-1], f"{self.name}_stern_deck"
+                    )
+                )
+            freeboard_surface = CompatibleLoft.create(
+                sections=freeboard_sections,
+                station_parameters=loft_parameters,
+                x_coordinates=x_coordinates,
+                longitudinal_degree=self.longitudinal_degree,
+                name=f"{self.name}_freeboard_surface",
+            )
+
         return SectionLoftAssembly(
             surface=surface,
             section_assemblies=tuple(assemblies),
             section_parameters=self.parameters.copy(),
             surface_assembly=surface_assembly,
             regional_surface=regional_surface,
+            freeboard_surface=freeboard_surface,
         )
 
     def _assemble_variational_surface(
