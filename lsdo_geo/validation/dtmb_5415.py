@@ -355,6 +355,29 @@ def _underwater_section_properties(points: np.ndarray) -> tuple[float, ...]:
     return float(y[-1]), float(-np.min(z)), half_area, deadrise, flare
 
 
+def _bulge_section_properties(points: np.ndarray) -> tuple[float, float, float]:
+    """Locate the widest point of the underwater section.
+
+    For an ordinary hull station the widest point is the design-waterline
+    endpoint, so the measurement is redundant. Through the sonar dome the
+    section is not monotone in ``z``: the bulb reaches its maximum half-breadth
+    well below the waterline and then necks back toward the centerplane. The
+    returned normalized arc-length coordinate is where that maximum falls along
+    the keel-to-waterline curve, which is exactly where a dome-aware section
+    needs an interior form-parameter waypoint.
+    """
+    underwater = _underwater_section_curve(points)
+    z = underwater[:, 2]
+    y = underwater[:, 1]
+    widest = int(np.argmax(y))
+    curve = np.column_stack((z, y))
+    lengths = np.linalg.norm(np.diff(curve, axis=0), axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    total = cumulative[-1]
+    parameter = float(cumulative[widest] / total) if total > 0.0 else 0.0
+    return float(y[widest]), float(z[widest]), parameter
+
+
 def _deck_section_properties(points: np.ndarray) -> tuple[float, float, float]:
     """Measure the deck-edge half-breadth, height, and tangent angle.
 
@@ -443,7 +466,7 @@ def extract_dtmb_5415_form_data(
         return DTMB5415Region.MAIN_HULL
 
     def properties(parameters: np.ndarray) -> np.ndarray:
-        output = np.zeros((parameters.size, 8))
+        output = np.zeros((parameters.size, 11))
         for index, parameter in enumerate(parameters):
             x_coordinate = forward_perpendicular + length * float(parameter)
             region = region_at(x_coordinate)
@@ -455,7 +478,8 @@ def extract_dtmb_5415_form_data(
                 transverse_resolution,
             )
             output[index, :5] = _underwater_section_properties(points)
-            output[index, 5:] = _deck_section_properties(points)
+            output[index, 5:8] = _deck_section_properties(points)
+            output[index, 8:] = _bulge_section_properties(points)
         return output
 
     integration_parameters = np.linspace(0.005, 1.0, integration_station_count)
@@ -492,6 +516,9 @@ def extract_dtmb_5415_form_data(
         deck_half_breadths=sampled[:, 5],
         deck_heights=sampled[:, 6],
         deck_tangent_angles=sampled[:, 7],
+        bulge_half_breadths=sampled[:, 8],
+        bulge_heights=sampled[:, 9],
+        bulge_parameters=sampled[:, 10],
     )
     return DTMB5415FormData(
         primary_parameters=NavalHullParameters(
@@ -648,6 +675,7 @@ def calibrate_dtmb_5415_form_hull(
     print_status: bool = False,
     include_deck: bool = False,
     use_fullness_curve: bool = False,
+    include_sonar_dome_waypoints: bool = False,
 ) -> DTMB5415FormCalibration:
     """Calibrate a naval-variable hull while preserving primary particulars.
 
@@ -660,15 +688,19 @@ def calibrate_dtmb_5415_form_hull(
     ``Cross Section Area = ... * SectionFullness`` formula in the same figure.
     """
     form_data = extract_dtmb_5415_form_data(reference)
+    disabled: dict[str, None] = {}
     if not include_deck:
+        disabled.update(
+            deck_half_breadths=None, deck_heights=None, deck_tangent_angles=None
+        )
+    if not include_sonar_dome_waypoints:
+        disabled.update(
+            bulge_half_breadths=None, bulge_heights=None, bulge_parameters=None
+        )
+    if disabled:
         form_data = dataclasses.replace(
             form_data,
-            fit_targets=dataclasses.replace(
-                form_data.fit_targets,
-                deck_half_breadths=None,
-                deck_heights=None,
-                deck_tangent_angles=None,
-            ),
+            fit_targets=dataclasses.replace(form_data.fit_targets, **disabled),
         )
     regions = dtmb_5415_longitudinal_regions(reference, form_data)
     if section_station_parameters is None:

@@ -35,6 +35,8 @@ class FormCurveKind(str, Enum):
     DECK_EDGE = "deck_edge"
     DECK_HEIGHT = "deck_height"
     DECK_TANGENT = "deck_tangent"
+    BULGE_HALF_BREADTH = "bulge_half_breadth"
+    BULGE_HEIGHT = "bulge_height"
     CHINE = "chine"
     DEADRISE = "deadrise"
     FLARE = "flare"

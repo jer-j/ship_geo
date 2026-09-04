@@ -133,6 +133,7 @@ class SectionProblem:
         fit_parameters: Any | None = None,
         fit_points: Any | None = None,
         fit_weight: float = 0.0,
+        interior_points: Any | None = None,
         deck_height: Any | None = None,
         deck_half_breadth: Any | None = None,
         deck_tangent_angle: Any | None = None,
@@ -196,6 +197,14 @@ class SectionProblem:
             else:
                 target = np.asarray(chine_point, dtype=float)
             self.problem.add_point_constraint(chine_parameter, target)
+        if interior_points is not None:
+            for parameter, point in interior_points:
+                value = float(parameter)
+                if not 0.0 < value < 1.0:
+                    raise ValueError(
+                        "interior waypoint parameters must lie strictly inside (0, 1)."
+                    )
+                self.problem.add_point_constraint(value, point)
         self.problem.add_area_constraint(half_area)
 
         deck_given = (

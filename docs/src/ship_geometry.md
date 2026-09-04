@@ -34,6 +34,34 @@ $$
 linear map from the solved transverse control polygons to the surface control
 net, so it creates no nested nonlinear solve.
 
+### KKT sparsity and where the solve cost actually goes
+
+The assembled KKT matrix is strongly sparse and bordered block-diagonal.
+Transverse sections never couple to one another; each couples only to its own
+multipliers and to the handful of shared longitudinal curves that supply its
+draft, half-breadth, area, and tangent targets. A measured three-station
+form-parameter hull gives a $105\times105$ KKT matrix with 1032 structural
+nonzeros, a density of $0.094$.
+
+That sparsity is nonetheless **not** where a speed-up is available. The Newton
+step is a dense `numpy.linalg.solve`, but at these dimensions the factorization
+is microseconds. Timing the same case at one and three iterations separates a
+fixed graph-construction cost of roughly $21\ \mathrm{s}$ from roughly
+$14\ \mathrm{s}$ per Newton iteration; the per-iteration cost is CSDL
+interpreting the derivative graph operation-by-operation in Python, and it
+scales with graph size rather than with matrix bandwidth. Switching
+`csdl.derivative` from its looped accumulation to the batched form
+(`loop=False`) changed the total by under $2\%$.
+
+The lever that would matter is eliminating per-operation Python overhead
+entirely by JIT-compiling the graph through the `csdl_alpha` JAX backend.
+That path is currently blocked for this package: `ship_geo` reads `.value`
+during graph construction -- for constraint-target validation, for
+initial-guess interpolation, and for the least-squares section
+initialization -- and those values only exist under an `inline=True` recorder.
+Making the ship layer JAX-ready means deferring every construction-time
+`.value` read, which is a separate piece of work from the geometry itself.
+
 `FSurfaceProblem` adds a free tensor-product surface control net when lofted
 section coefficients alone are not sufficiently general. Its primary
 `assemble(system)` interface contributes the control net, surface-fairness

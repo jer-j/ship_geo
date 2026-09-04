@@ -101,6 +101,9 @@ class LongitudinalFitTargets:
     deck_half_breadths: Any | None = None
     deck_heights: Any | None = None
     deck_tangent_angles: Any | None = None
+    bulge_half_breadths: Any | None = None
+    bulge_heights: Any | None = None
+    bulge_parameters: Any | None = None
 
     def validated(self) -> LongitudinalFitTargets:
         """Return a normalized target object after deterministic checks."""
@@ -128,6 +131,18 @@ class LongitudinalFitTargets:
         ):
             raise ValueError(
                 "deck_half_breadths, deck_heights, and deck_tangent_angles must be "
+                "supplied together."
+            )
+        bulge_fields = (
+            self.bulge_half_breadths,
+            self.bulge_heights,
+            self.bulge_parameters,
+        )
+        if any(field is not None for field in bulge_fields) and any(
+            field is None for field in bulge_fields
+        ):
+            raise ValueError(
+                "bulge_half_breadths, bulge_heights, and bulge_parameters must be "
                 "supplied together."
             )
         return LongitudinalFitTargets(
@@ -160,6 +175,23 @@ class LongitudinalFitTargets:
                     self.deck_tangent_angles, count, "deck_tangent_angles"
                 )
             ),
+            bulge_half_breadths=(
+                None
+                if self.bulge_half_breadths is None
+                else _sequence_values(
+                    self.bulge_half_breadths, count, "bulge_half_breadths"
+                )
+            ),
+            bulge_heights=(
+                None
+                if self.bulge_heights is None
+                else _sequence_values(self.bulge_heights, count, "bulge_heights")
+            ),
+            bulge_parameters=(
+                None
+                if self.bulge_parameters is None
+                else _sequence_values(self.bulge_parameters, count, "bulge_parameters")
+            ),
         )
 
 
@@ -180,6 +212,8 @@ class FormParameterHullGeometry:
     deck_edge_curve: FormCurve | None = None
     deck_height_curve: FormCurve | None = None
     deck_tangent_curve: FormCurve | None = None
+    bulge_breadth_curve: FormCurve | None = None
+    bulge_height_curve: FormCurve | None = None
 
     def recovered_primary_parameters(self) -> dict[str, csdl.Variable]:
         """Recover the exact naval particulars represented by the form curves."""
@@ -229,6 +263,8 @@ class FormParameterHullAssembly:
             deck_edge_curve=curves.get(FormCurveKind.DECK_EDGE),
             deck_height_curve=curves.get(FormCurveKind.DECK_HEIGHT),
             deck_tangent_curve=curves.get(FormCurveKind.DECK_TANGENT),
+            bulge_breadth_curve=curves.get(FormCurveKind.BULGE_HALF_BREADTH),
+            bulge_height_curve=curves.get(FormCurveKind.BULGE_HEIGHT),
         )
 
 
@@ -257,6 +293,7 @@ class FormParameterHullProblem:
         x_origin: Any = 0.0,
         longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
         use_fullness_curve: bool = False,
+        bulge_depth_threshold: float = 0.15,
         name: str = "form_parameter_hull",
     ) -> None:
         primary_parameters.validate_current_values()
@@ -295,6 +332,8 @@ class FormParameterHullProblem:
         )
         self.use_fullness_curve = bool(use_fullness_curve)
         self.model_deck = targets.deck_half_breadths is not None
+        self.model_bulge = targets.bulge_half_breadths is not None
+        self.bulge_depth_threshold = float(bulge_depth_threshold)
         self.name = name
 
     def solve(
@@ -380,6 +419,18 @@ class FormParameterHullProblem:
             target_map[FormCurveKind.DECK_TANGENT] = self.targets.deck_tangent_angles
             zero_at_bow_kinds.append(FormCurveKind.DECK_EDGE)
 
+        if self.model_bulge:
+            problems[FormCurveKind.BULGE_HALF_BREADTH] = self._problem(
+                FormCurveKind.BULGE_HALF_BREADTH
+            )
+            problems[FormCurveKind.BULGE_HEIGHT] = self._problem(
+                FormCurveKind.BULGE_HEIGHT
+            )
+            target_map[FormCurveKind.BULGE_HALF_BREADTH] = (
+                self.targets.bulge_half_breadths
+            )
+            target_map[FormCurveKind.BULGE_HEIGHT] = self.targets.bulge_heights
+
         assemblies = {
             kind: problem.assemble(
                 system,
@@ -402,6 +453,8 @@ class FormParameterHullProblem:
             FormCurveKind.DECK_EDGE: 1.0 / _scalar_value(beam),
             FormCurveKind.DECK_HEIGHT: 1.0 / _scalar_value(draft),
             FormCurveKind.DECK_TANGENT: 1.0,
+            FormCurveKind.BULGE_HALF_BREADTH: 1.0 / _scalar_value(beam),
+            FormCurveKind.BULGE_HEIGHT: 1.0 / _scalar_value(draft),
         }
         for kind, assembly in assemblies.items():
             residual = scales[kind] * (
@@ -480,6 +533,40 @@ class FormParameterHullProblem:
                 .reshape((num_stations,))
             )
 
+        section_interior_points = None
+        if self.model_bulge:
+            fit_station_values = np.asarray(fit_stations, dtype=float)
+            bulge_depths = -_current_array(self.targets.bulge_heights)
+            local_drafts = _current_array(self.targets.drafts)
+            depth_fractions = bulge_depths / np.maximum(local_drafts, 1.0e-12)
+            bulge_curve_parameters = _current_array(self.targets.bulge_parameters)
+            breadth_curve = curves[FormCurveKind.BULGE_HALF_BREADTH]
+            height_curve = curves[FormCurveKind.BULGE_HEIGHT]
+            section_interior_points = []
+            for station in section_stations:
+                station_value = float(station)
+                depth_fraction = float(
+                    np.interp(station_value, fit_station_values, depth_fractions)
+                )
+                parameter = float(
+                    np.interp(
+                        station_value, fit_station_values, bulge_curve_parameters
+                    )
+                )
+                if (
+                    depth_fraction < self.bulge_depth_threshold
+                    or not 0.02 < parameter < 0.98
+                ):
+                    section_interior_points.append(())
+                    continue
+                waypoint = csdl.concatenate(
+                    (
+                        height_curve.evaluate(station_value).reshape((1,)),
+                        breadth_curve.evaluate(station_value).reshape((1,)),
+                    )
+                )
+                section_interior_points.append(((parameter, waypoint),))
+
         section_problem = SectionLoftProblem(
             length=length,
             station_parameters=section_stations,
@@ -502,6 +589,7 @@ class FormParameterHullProblem:
             deck_heights=deck_heights_for_sections,
             deck_half_breadths=deck_half_breadths_for_sections,
             deck_tangent_angles=deck_tangent_angles_for_sections,
+            section_interior_points=section_interior_points,
             num_section_control_points=self.num_section_control_points,
             pointed_ends=(True, section_stations[-1] < 1.0),
             x_origin=self.x_origin,

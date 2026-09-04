@@ -120,6 +120,11 @@ def main() -> None:
     cache = np.load(arguments.cache)
     underwater = cache["underwater_mesh"]
     freeboard = cache["freeboard_mesh"]
+    # The accurate run caches the three-region loft separately; prefer it.
+    patch_keys = sorted(key for key in cache.files if key.startswith("patch_"))
+    regional_patches = [(key[len("patch_"):], cache[key]) for key in patch_keys]
+    if regional_patches:
+        print("regional patches:", ", ".join(name for name, _ in regional_patches))
 
     functions = reference.build_functions()
     exact_meshes = {
@@ -168,13 +173,14 @@ def main() -> None:
 
     # ---- Figure 2: close-ups ---------------------------------------------
     closeups = [
-        ("sonar dome & bow", x_of(0.0) - 0.05, x_of(regions[1].end) + 0.05, -55, 12),
+        ("sonar dome bulb", x_of(0.0) - 0.05, x_of(regions[0].end), -60, 8),
+        ("bow & dome transition", x_of(0.0) - 0.05, x_of(regions[1].end) + 0.08, -55, 14),
         ("midship", x_of(0.42), x_of(0.58), -55, 12),
-        ("stern & transom", x_of(0.90), x_of(1.0) + 0.05, -55, 12),
+        ("stern & transom", x_of(0.88), x_of(1.0) + 0.05, -55, 12),
     ]
-    figure = plt.figure(figsize=(16.0, 5.4))
+    figure = plt.figure(figsize=(20.0, 5.4))
     for panel_index, (title, x_lo, x_hi, azim, elev) in enumerate(closeups):
-        axis = figure.add_subplot(1, 3, panel_index + 1, projection="3d")
+        axis = figure.add_subplot(1, 4, panel_index + 1, projection="3d")
         for region, mesh in exact_meshes.items():
             mask_rows = np.any(
                 (mesh[:, :, 0] >= x_lo) & (mesh[:, :, 0] <= x_hi), axis=1

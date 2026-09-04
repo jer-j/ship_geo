@@ -139,6 +139,7 @@ class SectionLoftProblem:
         deck_heights: Sequence[Any] | csdl.Variable | None = None,
         deck_half_breadths: Sequence[Any] | csdl.Variable | None = None,
         deck_tangent_angles: Sequence[Any] | csdl.Variable | None = None,
+        section_interior_points: Sequence[Any] | None = None,
         num_section_control_points: int = 8,
         section_degree: int = 3,
         longitudinal_degree: int = 3,
@@ -227,6 +228,11 @@ class SectionLoftProblem:
         self.deck_heights = deck_heights
         self.deck_half_breadths = deck_half_breadths
         self.deck_tangent_angles = deck_tangent_angles
+        if section_interior_points is not None and len(section_interior_points) != (
+            parameters.size
+        ):
+            raise ValueError("section_interior_points must match station_parameters.")
+        self.section_interior_points = section_interior_points
         self.num_section_control_points = int(num_section_control_points)
         self.section_degree = int(section_degree)
         self.longitudinal_degree = int(longitudinal_degree)
@@ -319,6 +325,11 @@ class SectionLoftProblem:
                     else self.section_fit_points[index]
                 ),
                 fit_weight=self.section_fit_weight,
+                interior_points=(
+                    None
+                    if self.section_interior_points is None
+                    else self.section_interior_points[index]
+                ),
                 deck_height=(
                     _sequence_item(self.deck_heights, index) if model_deck else None
                 ),
