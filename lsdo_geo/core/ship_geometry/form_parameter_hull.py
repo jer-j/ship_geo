@@ -305,6 +305,7 @@ class FormParameterHullProblem:
         x_origin: Any = 0.0,
         longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
         use_fullness_curve: bool = False,
+        form_knots: npt.ArrayLike | None = None,
         bulge_depth_threshold: float = 0.15,
         name: str = "form_parameter_hull",
     ) -> None:
@@ -348,6 +349,9 @@ class FormParameterHullProblem:
         self.use_fullness_curve = bool(use_fullness_curve)
         self.model_deck = targets.deck_half_breadths is not None
         self.model_bulge = targets.bulge_half_breadths is not None
+        self.form_knots = (
+            None if form_knots is None else np.asarray(form_knots, dtype=float)
+        )
         self.bulge_depth_threshold = float(bulge_depth_threshold)
         self.name = name
 
@@ -655,6 +659,7 @@ class FormParameterHullProblem:
         return FormCurveProblem(
             kind,
             num_control_points=self.num_form_control_points,
+            knots=self.form_knots,
             fairness_weights={2: self.form_fairness_weight},
             regularization=1.0e-12,
             name=f"{self.name}_{kind.value}",

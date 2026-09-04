@@ -59,6 +59,60 @@ def _current_scalar(value: Any) -> float | None:
     return float(np.asarray(value).reshape(-1)[0])
 
 
+def clustered_open_knots(
+    num_control_points: int,
+    degree: int,
+    breakpoint: float,
+    forward_fraction: float = 0.5,
+) -> np.ndarray:
+    """Return an open knot vector with interior knots massed forward.
+
+    A uniform knot vector distributes polynomial freedom evenly along the
+    ship, which starves any short feature. With ten control points at degree
+    three the first interior knot falls near ``v = 0.14``, so a sonar dome
+    ending at ``v = 0.12`` lies entirely inside one cubic span and cannot
+    show a bulb that rises and falls. Concentrating interior knots ahead of
+    ``breakpoint`` adds spans exactly where the shape changes fastest,
+    without adding coefficients elsewhere.
+
+    Parameters
+    ----------
+    num_control_points
+        Coefficient count of the target space.
+    degree
+        Polynomial degree.
+    breakpoint
+        Parameter separating the clustered forward region from the rest. A
+        knot is placed exactly here, so the two regions meet at a knot.
+    forward_fraction
+        Share of the interior knots placed ahead of ``breakpoint``.
+    """
+    if not 0.0 < breakpoint < 1.0:
+        raise ValueError("breakpoint must lie strictly inside (0, 1).")
+    if not 0.0 < forward_fraction < 1.0:
+        raise ValueError("forward_fraction must lie strictly inside (0, 1).")
+    interior_count = num_control_points - degree - 1
+    if interior_count < 1:
+        raise ValueError("clustered knots require num_control_points > degree + 1.")
+    forward_count = int(round(forward_fraction * (interior_count - 1)))
+    forward_count = max(0, min(forward_count, interior_count - 1))
+    aft_count = interior_count - 1 - forward_count
+    forward = (
+        np.linspace(0.0, breakpoint, forward_count + 2)[1:-1]
+        if forward_count
+        else np.empty(0)
+    )
+    aft = (
+        np.linspace(breakpoint, 1.0, aft_count + 2)[1:-1]
+        if aft_count
+        else np.empty(0)
+    )
+    interior = np.concatenate((forward, [float(breakpoint)], aft))
+    return np.concatenate(
+        (np.zeros(degree + 1), interior, np.ones(degree + 1))
+    )
+
+
 @dataclass(frozen=True)
 class _DistributionConstraint:
     kind: str

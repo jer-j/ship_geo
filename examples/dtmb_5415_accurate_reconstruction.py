@@ -2,9 +2,15 @@
 
 This is the full-resolution counterpart to ``dtmb_5415_deck_and_fullness.py``:
 
-* the twelve-station clustered station set, which resolves the sonar dome, the
-  dome-to-hull transition, and terminates at ``v = 1`` so the transom is a
-  finite section rather than a collapsed point;
+* observation stations clustered through the sonar dome. The default
+  ``linspace(0.03, 1.0, 13)`` lands a single sample inside a dome that ends
+  near ``v = 0.12``, so every longitudinal curve describing the bulb was fit
+  through one observation and the forward sections were extrapolated;
+* longitudinal curves on feature-clustered knots. On a uniform vector with ten
+  coefficients the first interior knot falls near ``v = 0.14``, putting the
+  whole dome inside one cubic span, which cannot rise and fall;
+* a generating station set clustered forward and terminating at ``v = 1``, so
+  the transom is a finite section rather than a collapsed point;
 * the three-region longitudinal loft (forward dome / transition / main hull);
 * deck-edge sections and the explicit ``SectionFullness`` curve; and
 * sonar-dome interior waypoints driven by ``BulgeHalfBreadth`` and
@@ -38,6 +44,7 @@ from pathlib import Path
 import csdl_alpha as csdl
 import numpy as np
 
+from lsdo_geo.core.ship_geometry.form_curves import clustered_open_knots
 from lsdo_geo.core.ship_geometry.form_parameter_hull import FormParameterHullProblem
 from lsdo_geo.validation import (
     download_dtmb_5415,
@@ -58,13 +65,18 @@ def _default_section_stations(regions) -> np.ndarray:
     transition_end = regions[1].end
     return np.asarray(
         (
-            0.04,
-            0.08,
+            0.015,
+            0.035,
+            0.060,
+            0.090,
+            # The transition is lofted as its own cubic patch, so it needs at
+            # least four stations of its own.
             transition_start,
             transition_start + (transition_end - transition_start) / 3.0,
             transition_start + 2.0 * (transition_end - transition_start) / 3.0,
             transition_end,
-            0.28,
+            0.22,
+            0.30,
             0.42,
             0.58,
             0.75,
@@ -74,12 +86,27 @@ def _default_section_stations(regions) -> np.ndarray:
     )
 
 
+def _observation_stations(regions) -> np.ndarray:
+    """Auxiliary observation stations, clustered through the sonar dome.
+
+    The default ``linspace(0.03, 1.0, 13)`` puts a single sample inside the
+    dome, so every longitudinal curve describing the bulb is fit through one
+    observation and the forward sections are extrapolated. Sampling density
+    here is nearly free: the observations enter as one vectorized
+    least-squares term per curve, not as extra implicit states.
+    """
+    dome_end = regions[1].end
+    forward = np.linspace(0.004, dome_end, 14)
+    aft = np.linspace(dome_end + 0.03, 1.0, 16)
+    return np.concatenate((forward, aft))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path)
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--backend", choices=("jax", "inline"), default="jax")
-    parser.add_argument("--num-form-control-points", type=int, default=10)
+    parser.add_argument("--num-form-control-points", type=int, default=14)
     parser.add_argument("--num-section-control-points", type=int, default=8)
     parser.add_argument(
         "--num-deck-control-points",
@@ -109,9 +136,20 @@ def main() -> None:
     extraction_recorder = csdl.Recorder(inline=True)
     extraction_recorder.start()
     reference = load_dtmb_5415(source)
+    # A first pass only to locate the dome and transition boundaries, which
+    # then set where the observations need to be dense.
     form_data = extract_dtmb_5415_form_data(reference)
     regions = dtmb_5415_longitudinal_regions(reference, form_data)
+    observation_stations = _observation_stations(regions)
+    form_data = extract_dtmb_5415_form_data(
+        reference, station_parameters=observation_stations
+    )
     section_stations = _default_section_stations(regions)
+    print(
+        f"observations: {observation_stations.size} stations, "
+        f"{int(np.sum(observation_stations <= regions[1].end))} inside the dome "
+        f"and transition (v <= {regions[1].end:.4f})"
+    )
     section_data = extract_dtmb_5415_section_fit_data(reference, section_stations)
     holdout_data = extract_dtmb_5415_section_fit_data(
         reference,
@@ -165,6 +203,12 @@ def main() -> None:
         section_fit_weight=250.0,
         form_fit_weight=100.0,
         use_fullness_curve=True,
+        form_knots=clustered_open_knots(
+            arguments.num_form_control_points,
+            3,
+            breakpoint=float(regions[1].end),
+            forward_fraction=0.45,
+        ),
         x_origin=form_data.coordinate_origin,
         longitudinal_regions=regions,
         name="dtmb_5415_accurate",
