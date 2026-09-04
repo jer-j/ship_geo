@@ -192,7 +192,9 @@ def main() -> None:
         + surface.fairness_energy((0, 2))
     )
     body_parameters = np.linspace(0.0, 1.0, 61)
-    body_stations = (0.12, 0.30, 0.50, 0.75, 0.95)
+    # Two dome stations are included deliberately. A knob acting only on the
+    # bulb cannot be seen in a total-energy figure or at stations aft of it.
+    body_stations = (0.03, 0.06, 0.12, 0.30, 0.50, 0.75, 0.95)
     outputs: dict[str, csdl.Variable] = {
         "constraint_residual": geometry.hull.variational_result.constraint_residual,
         "fairness_energy": fairness,
@@ -231,6 +233,21 @@ def main() -> None:
         elapsed = time.time() - start
         values = {key: np.asarray(simulator[var]) for key, var in outputs.items()}
         values["_seconds"] = np.asarray(elapsed)
+        # Direct geometric movement, per region, against the baseline hull.
+        # Aggregate energy cannot reveal a knob that acts on two sections.
+        sections = np.concatenate(
+            [values[f"section_{i}"] for i in range(len(body_stations))]
+        )
+        dome = np.concatenate([values[f"section_{i}"] for i in (0, 1)])
+        if solve.baseline_sections is None:
+            solve.baseline_sections = sections
+            solve.baseline_dome = dome
+            move = dome_move = 0.0
+        else:
+            move = float(np.max(np.abs(sections - solve.baseline_sections)))
+            dome_move = float(np.max(np.abs(dome - solve.baseline_dome)))
+        values["_move"] = np.asarray(move)
+        values["_dome_move"] = np.asarray(dome_move)
         print(
             f"{label:<26} "
             f"B={float(values['primary_beam'].reshape(-1)[0]):.4f} "
@@ -240,9 +257,13 @@ def main() -> None:
             f"| fair={float(values['fairness_energy'].reshape(-1)[0]):.4g} "
             f"minJ={float(values['min_jacobian'].reshape(-1)[0]):.3g} "
             f"|c|={float(np.max(np.abs(values['constraint_residual']))):.1e} "
-            f"{elapsed:.3f}s"
+            f"| move={move * 1e3:7.2f}mm dome={dome_move * 1e3:7.2f}mm "
+            f"{elapsed:.2f}s"
         )
         return values
+
+    solve.baseline_sections = None
+    solve.baseline_dome = None
 
     def defaults() -> dict[str, np.ndarray]:
         values = {
