@@ -606,6 +606,19 @@ class FormParameterHullProblem:
         curves = {kind: assembly.curve for kind, assembly in assemblies.items()}
 
         num_stations = section_stations.size
+        # Fullness is defined against the section's full depth. Where a sonar
+        # dome is carried, KEEL_PROFILE is the blend line rather than the
+        # deepest point, and measuring fullness against it inflates the ratio
+        # by the depth ratio -- about 2.4x through the DTMB 5415 dome, and
+        # without bound as the waterline breadth vanishes at the stem. The
+        # dome-depth curve is the true keel profile over the whole length
+        # (aft of the dome its observations coincide with the keel), so it is
+        # the right denominator whenever it exists.
+        fullness_depth_kind = (
+            FormCurveKind.DOME_DEPTH
+            if self.model_dome_band
+            else FormCurveKind.KEEL_PROFILE
+        )
         if self.use_fullness_curve:
             fullness_problem = FormCurveProblem(
                 FormCurveKind.FULLNESS,
@@ -624,7 +637,7 @@ class FormParameterHullProblem:
                 breadth_value = curves[FormCurveKind.WATERLINE_HALF_BREADTH].evaluate(
                     station_value
                 ).reshape((1,))
-                draft_value = curves[FormCurveKind.KEEL_PROFILE].evaluate(
+                draft_value = curves[fullness_depth_kind].evaluate(
                     station_value
                 ).reshape((1,))
                 fullness_problem.add_value_constraint(
@@ -642,7 +655,7 @@ class FormParameterHullProblem:
                 * curves[FormCurveKind.WATERLINE_HALF_BREADTH]
                 .evaluate(section_stations)
                 .reshape((num_stations,))
-                * curves[FormCurveKind.KEEL_PROFILE]
+                * curves[fullness_depth_kind]
                 .evaluate(section_stations)
                 .reshape((num_stations,))
             )
@@ -745,7 +758,11 @@ class FormParameterHullProblem:
         hint_stations = np.asarray(fit_stations, dtype=float)
         section_geometry_hints: list[dict[str, float]] = []
         hint_sources = {
-            "draft": _current_array(self.targets.drafts),
+            "draft": _current_array(
+                self.targets.blend_depths
+                if self.model_dome_band
+                else self.targets.drafts
+            ),
             "half_breadth": _current_array(self.targets.half_breadths),
         }
         if self.model_deck:
@@ -791,6 +808,9 @@ class FormParameterHullProblem:
                 .evaluate(section_stations)
                 .reshape((num_stations,))
             )
+            band = np.asarray(dome_mask, dtype=float)
+            dome_areas_for_sections = dome_areas_for_sections * band
+            keel_half_breadths_for_sections = keel_half_breadths_for_sections * band
             half_areas_for_sections = (
                 half_areas_for_sections - dome_areas_for_sections
             )
