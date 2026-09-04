@@ -419,7 +419,7 @@ def _dome_band_properties(points: np.ndarray) -> tuple[float, ...]:
 
 
 def _close_dome_band_smoothly(
-    stations: np.ndarray, sampled: np.ndarray, closure_window: float = 0.012
+    stations: np.ndarray, sampled: np.ndarray, closure_window: float = 0.018
 ) -> None:
     """Taper the sonar-dome band to nothing across its closure, in place.
 

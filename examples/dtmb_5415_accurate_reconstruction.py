@@ -76,10 +76,10 @@ def _default_section_stations(regions) -> np.ndarray:
             # end span alone. The last sits just inside the taper, so the
             # patch runs out to nothing rather than ending at finite width.
             0.012,
-            0.026,
-            0.040,
-            0.054,
-            0.066,
+            0.025,
+            0.038,
+            0.051,
+            0.063,
             0.090,
             # The transition is lofted as its own cubic patch, so it needs at
             # least four stations of its own.
