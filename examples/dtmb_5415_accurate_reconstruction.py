@@ -8,9 +8,12 @@ This is the full-resolution counterpart to ``dtmb_5415_deck_and_fullness.py``:
   through one observation and the forward sections were extrapolated;
 * longitudinal curves on feature-clustered knots. On a uniform vector with ten
   coefficients the first interior knot falls near ``v = 0.14``, putting the
-  whole dome inside one cubic span, which cannot rise and fall;
-* a generating station set clustered forward and terminating at ``v = 1``, so
-  the transom is a finite section rather than a collapsed point;
+  whole dome inside one cubic span, which cannot rise and fall. The hull has a
+  second short feature aft: the skeg termination drops the keel roughly
+  100 mm within ``0.04`` of length, so knots are massed at both ends and left
+  sparse through the prismatic midbody;
+* a generating station set clustered at both features and terminating at
+  ``v = 1``, so the transom is a finite section rather than a collapsed point;
 * the three-region longitudinal loft (forward dome / transition / main hull);
 * deck-edge sections and the explicit ``SectionFullness`` curve; and
 * sonar-dome interior waypoints driven by ``BulgeHalfBreadth`` and
@@ -44,7 +47,7 @@ from pathlib import Path
 import csdl_alpha as csdl
 import numpy as np
 
-from lsdo_geo.core.ship_geometry.form_curves import clustered_open_knots
+from lsdo_geo.core.ship_geometry.form_curves import piecewise_open_knots
 from lsdo_geo.core.ship_geometry.form_parameter_hull import FormParameterHullProblem
 from lsdo_geo.validation import (
     download_dtmb_5415,
@@ -76,11 +79,18 @@ def _default_section_stations(regions) -> np.ndarray:
             transition_start + 2.0 * (transition_end - transition_start) / 3.0,
             transition_end,
             0.22,
-            0.30,
-            0.42,
+            0.32,
+            0.45,
             0.58,
-            0.75,
+            0.70,
+            # The skeg termination drops the keel sharply between v = 0.83 and
+            # v = 0.87, so the run aft needs stations as closely spaced as the
+            # dome does forward. v = 0.83 is deliberately left uncovered so it
+            # remains an independent holdout.
+            0.79,
+            0.845,
             0.90,
+            0.95,
             1.0,
         )
     )
@@ -97,8 +107,9 @@ def _observation_stations(regions) -> np.ndarray:
     """
     dome_end = regions[1].end
     forward = np.linspace(0.004, dome_end, 14)
-    aft = np.linspace(dome_end + 0.03, 1.0, 16)
-    return np.concatenate((forward, aft))
+    middle = np.linspace(dome_end + 0.03, 0.74, 11)
+    stern = np.linspace(0.76, 1.0, 13)
+    return np.concatenate((forward, middle, stern))
 
 
 def main() -> None:
@@ -106,7 +117,7 @@ def main() -> None:
     parser.add_argument("--source", type=Path)
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--backend", choices=("jax", "inline"), default="jax")
-    parser.add_argument("--num-form-control-points", type=int, default=14)
+    parser.add_argument("--num-form-control-points", type=int, default=18)
     parser.add_argument("--num-section-control-points", type=int, default=8)
     parser.add_argument(
         "--num-deck-control-points",
@@ -203,11 +214,11 @@ def main() -> None:
         section_fit_weight=250.0,
         form_fit_weight=100.0,
         use_fullness_curve=True,
-        form_knots=clustered_open_knots(
+        form_knots=piecewise_open_knots(
             arguments.num_form_control_points,
             3,
-            breakpoint=float(regions[1].end),
-            forward_fraction=0.45,
+            breakpoints=(float(regions[1].end), 0.72),
+            weights=(0.34, 0.33, 0.33),
         ),
         x_origin=form_data.coordinate_origin,
         longitudinal_regions=regions,

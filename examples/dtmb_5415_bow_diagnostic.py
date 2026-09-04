@@ -82,6 +82,13 @@ def main() -> None:
         type=Path,
         default=Path("docs/src/images/dtmb_5415_bow_diagnostic.png"),
     )
+    parser.add_argument(
+        "--stations",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Stations to overlay (default: the forward group).",
+    )
     arguments = parser.parse_args()
 
     source = arguments.source
@@ -117,7 +124,11 @@ def main() -> None:
               f"{'YES' if applied else 'no'}")
 
     cache = np.load(arguments.cache)
-    bow_stations = (0.02, 0.04, 0.06, 0.08, 0.12, 0.18)
+    bow_stations = (
+        tuple(arguments.stations)
+        if arguments.stations
+        else (0.02, 0.04, 0.06, 0.08, 0.12, 0.18)
+    )
     figure, axes = plt.subplots(1, len(bow_stations), figsize=(3.1 * len(bow_stations), 4.6))
     for axis, station in zip(axes, bow_stations):
         exact = _exact_section(reference, form_data, station)

@@ -9,6 +9,7 @@ introducing redundant longitudinal-coordinate degrees of freedom.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from itertools import pairwise
@@ -110,6 +111,61 @@ def clustered_open_knots(
     interior = np.concatenate((forward, [float(breakpoint)], aft))
     return np.concatenate(
         (np.zeros(degree + 1), interior, np.ones(degree + 1))
+    )
+
+
+def piecewise_open_knots(
+    num_control_points: int,
+    degree: int,
+    breakpoints: Sequence[float],
+    weights: Sequence[float],
+) -> np.ndarray:
+    """Return an open knot vector with interior knots shared out by segment.
+
+    A hull has more than one short feature. DTMB 5415 carries a sonar dome
+    ending near ``v = 0.12`` forward and a skeg whose termination drops the
+    keel roughly 100 mm within ``0.04`` of length aft. Both need local
+    polynomial freedom; the long prismatic midbody between them does not.
+
+    ``breakpoints`` are interior segment boundaries, each of which receives a
+    knot so segments meet cleanly. ``weights`` gives the share of the
+    remaining interior knots per segment and must have one more entry than
+    ``breakpoints``.
+    """
+    bounds = [float(value) for value in breakpoints]
+    if not bounds:
+        raise ValueError("at least one breakpoint is required.")
+    if any(not 0.0 < value < 1.0 for value in bounds):
+        raise ValueError("breakpoints must lie strictly inside (0, 1).")
+    if any(second <= first for first, second in zip(bounds, bounds[1:])):
+        raise ValueError("breakpoints must increase strictly.")
+    shares = np.asarray(weights, dtype=float)
+    if shares.size != len(bounds) + 1:
+        raise ValueError("weights must have one more entry than breakpoints.")
+    if np.any(shares < 0.0) or not np.sum(shares) > 0.0:
+        raise ValueError("weights must be nonnegative and not all zero.")
+
+    interior_count = num_control_points - degree - 1
+    free_count = interior_count - len(bounds)
+    if free_count < 0:
+        raise ValueError(
+            "num_control_points is too small for the requested breakpoints."
+        )
+    shares = shares / np.sum(shares)
+    counts = np.floor(shares * free_count).astype(int)
+    while int(np.sum(counts)) < free_count:
+        counts[int(np.argmax(shares * free_count - counts))] += 1
+
+    edges = [0.0, *bounds, 1.0]
+    interior: list[float] = []
+    for index, count in enumerate(counts):
+        lower, upper = edges[index], edges[index + 1]
+        if count:
+            interior.extend(np.linspace(lower, upper, count + 2)[1:-1].tolist())
+        if index < len(bounds):
+            interior.append(bounds[index])
+    return np.concatenate(
+        (np.zeros(degree + 1), np.asarray(interior, dtype=float), np.ones(degree + 1))
     )
 
 
