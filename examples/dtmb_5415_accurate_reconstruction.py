@@ -69,9 +69,16 @@ def _default_section_stations(regions) -> np.ndarray:
     transition_end = regions[1].end
     return np.asarray(
         (
-            0.015,
-            0.035,
-            0.060,
+            # The sonar-dome band closes near v = 0.072 (the neck between the
+            # bulb and the forefoot merges into a monotone profile there), so
+            # the band gets five stations of its own: a cubic dome patch needs
+            # four, and a fifth keeps the closure from being carried by the
+            # end span alone.
+            0.012,
+            0.026,
+            0.042,
+            0.058,
+            0.070,
             0.090,
             # The transition is lofted as its own cubic patch, so it needs at
             # least four stations of its own.
@@ -80,10 +87,9 @@ def _default_section_stations(regions) -> np.ndarray:
             transition_start + 2.0 * (transition_end - transition_start) / 3.0,
             transition_end,
             0.22,
-            0.32,
-            0.45,
-            0.58,
-            0.70,
+            0.36,
+            0.52,
+            0.68,
             # The skeg termination drops the keel sharply between v = 0.83 and
             # v = 0.87, so the run aft needs stations as closely spaced as the
             # dome does forward. v = 0.83 is deliberately left uncovered so it
@@ -107,10 +113,16 @@ def _observation_stations(regions) -> np.ndarray:
     least-squares term per curve, not as extra implicit states.
     """
     dome_end = regions[1].end
-    forward = np.linspace(0.004, dome_end, 14)
+    # Forward of v ~ 0.009 the section is a few millimetres wide and the neck
+    # detection is unresolved -- the blend height bounces between 0.016 and
+    # 0.247 over four consecutive samples. Sampling starts where the feature
+    # is actually resolvable and the fairness term carries the last few
+    # millimetres to the stem; no generating station lives there anyway.
+    band = np.linspace(0.009, 0.072, 12)
+    forward = np.linspace(0.080, dome_end, 6)
     middle = np.linspace(dome_end + 0.03, 0.74, 11)
     stern = np.linspace(0.76, 1.0, 13)
-    return np.concatenate((forward, middle, stern))
+    return np.concatenate((band, forward, middle, stern))
 
 
 def main() -> None:
@@ -127,6 +139,16 @@ def main() -> None:
         help=(
             "Freeboard segments carry only two point and two tangent conditions, "
             "so they need far fewer coefficients than the underwater sections."
+        ),
+    )
+    parser.add_argument(
+        "--num-dome-control-points",
+        type=int,
+        default=6,
+        help=(
+            "The dome band carries two point conditions, two tangent conditions "
+            "and an area condition, so it needs fewer coefficients than the "
+            "main underwater band."
         ),
     )
     parser.add_argument("--max-iter", type=int, default=12)
@@ -184,6 +206,33 @@ def main() -> None:
     print(f"extracted {section_stations.size} generating stations "
           f"and {len(DEFAULT_VALIDATION_STATIONS)} holdout stations")
 
+    # Report which generating stations will carry a sonar-dome band, using the
+    # same rule the solver applies, so a starved dome patch is visible before
+    # the expensive compile rather than after it.
+    dome_depths = np.asarray(form_data.fit_targets.dome_depths, dtype=float).reshape(-1)
+    blend_depths = np.asarray(
+        form_data.fit_targets.blend_depths, dtype=float
+    ).reshape(-1)
+    draft_value = float(np.asarray(form_data.primary_parameters.draft).reshape(-1)[0])
+    banded = [
+        float(station)
+        for station in section_stations
+        if (
+            np.interp(float(station), observation_stations, dome_depths)
+            - np.interp(float(station), observation_stations, blend_depths)
+        )
+        > 0.05 * draft_value
+    ]
+    print(
+        f"sonar-dome band on {len(banded)} generating stations: "
+        + ", ".join(f"{value:.3f}" for value in banded)
+    )
+    if len(banded) < 4:
+        raise SystemExit(
+            f"the dome patch needs at least four generating stations, got "
+            f"{len(banded)}; add stations forward of the dome closure."
+        )
+
     targets = form_data.fit_targets
     if arguments.no_dome_waypoints:
         import dataclasses
@@ -221,6 +270,7 @@ def main() -> None:
         num_form_control_points=arguments.num_form_control_points,
         num_section_control_points=arguments.num_section_control_points,
         num_deck_control_points=arguments.num_deck_control_points,
+        num_dome_control_points=arguments.num_dome_control_points,
         section_station_parameters=section_data.station_parameters,
         section_fit_parameters=section_data.curve_parameters,
         section_fit_points=section_data.points,
@@ -253,6 +303,8 @@ def main() -> None:
     }
     if geometry.hull.freeboard_surface is not None:
         outputs["freeboard_mesh"] = geometry.hull.freeboard_surface.mesh((41, 161))
+    if geometry.hull.dome_surface is not None:
+        outputs["dome_mesh"] = geometry.hull.dome_surface.mesh((41, 81))
     if regional is not None:
         for name, patch in regional.patches.items():
             outputs[f"patch_{name}"] = patch.mesh((61, 81))
@@ -346,8 +398,14 @@ def main() -> None:
         print(f"    v={station:.3f}  {1.0e3 * rms:8.3f}")
 
     for key, value in values.items():
-        if key.startswith(("patch_", "curve_")) or key.endswith("_mesh"):
+        if (
+            key.startswith(("patch_", "curve_", "fit_section_", "holdout_section_"))
+            or key.endswith("_mesh")
+        ):
             payload[key] = value
+    for label, data in (("fit", section_data), ("holdout", holdout_data)):
+        payload[f"{label}_reference_points"] = data.points
+        payload[f"{label}_curve_parameters"] = data.curve_parameters
     payload["section_stations"] = section_data.station_parameters
     payload["length"] = np.asarray(
         float(form_data.primary_parameters.length_between_perpendiculars)

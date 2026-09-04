@@ -120,6 +120,12 @@ def main() -> None:
     cache = np.load(arguments.cache)
     underwater = cache["underwater_mesh"]
     freeboard = cache["freeboard_mesh"]
+    # The sonar-dome band is a partial-length patch below the blend line and
+    # is only present once the hull is built with a separate dome section.
+    dome = cache["dome_mesh"] if "dome_mesh" in cache.files else None
+    if dome is not None:
+        print(f"sonar-dome patch: {dome.shape[0]}x{dome.shape[1]} samples, "
+              f"x {dome[:, :, 0].min():.4f} .. {dome[:, :, 0].max():.4f}")
     # The accurate run caches the three-region loft separately; prefer it.
     patch_keys = sorted(key for key in cache.files if key.startswith("patch_"))
     regional_patches = [(key[len("patch_"):], cache[key]) for key in patch_keys]
@@ -135,6 +141,7 @@ def main() -> None:
     exact_color = "#8c8c8c"
     generated_color_under = "#0072b2"
     generated_color_deck = "#d55e00"
+    generated_color_dome = "#009e73"
 
     # ---- Figure 1: full-hull overview -----------------------------------
     figure = plt.figure(figsize=(11.0, 6.5))
@@ -149,6 +156,11 @@ def main() -> None:
         axis, freeboard, generated_color_deck, stride_u=10, stride_v=40,
         label="generated: freeboard (new)",
     )
+    if dome is not None:
+        _draw_generated(
+            axis, dome, generated_color_dome, stride_u=8, stride_v=20,
+            label="generated: sonar-dome band (new)",
+        )
     from matplotlib.patches import Patch
 
     exact_handle = Patch(facecolor=exact_color, alpha=0.55, label="exact IGES reference")
@@ -188,10 +200,13 @@ def main() -> None:
             if not np.any(mask_rows):
                 continue
             _draw_exact(axis, mesh[mask_rows], stride=1)
-        for mesh, color, stride_v in (
+        panel_meshes = [
             (underwater, generated_color_under, 10),
             (freeboard, generated_color_deck, 18),
-        ):
+        ]
+        if dome is not None:
+            panel_meshes.append((dome, generated_color_dome, 6))
+        for mesh, color, stride_v in panel_meshes:
             mask_rows = np.any((mesh[:, :, 0] >= x_lo) & (mesh[:, :, 0] <= x_hi), axis=1)
             if not np.any(mask_rows):
                 continue

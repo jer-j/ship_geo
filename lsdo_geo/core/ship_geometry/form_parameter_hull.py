@@ -673,6 +673,24 @@ class FormParameterHullProblem:
                 .reshape((num_stations,))
             )
 
+        # Which generating stations carry a sonar-dome band. Topology is
+        # decided from the observations, not from the solve, and it is needed
+        # before the bulge waypoints because the band supersedes them.
+        dome_mask = None
+        if self.model_dome_band:
+            observed_depths = _current_array(self.targets.dome_depths)
+            observed_blend = _current_array(self.targets.blend_depths)
+            station_values = np.asarray(fit_stations, dtype=float)
+            threshold = self.dome_depth_threshold * _scalar_value(draft)
+            dome_mask = [
+                (
+                    float(np.interp(float(station), station_values, observed_depths))
+                    - float(np.interp(float(station), station_values, observed_blend))
+                )
+                > threshold
+                for station in section_stations
+            ]
+
         section_interior_points = None
         if self.model_bulge:
             fit_station_values = np.asarray(fit_stations, dtype=float)
@@ -681,8 +699,16 @@ class FormParameterHullProblem:
             depth_fractions = bulge_depths / np.maximum(local_drafts, 1.0e-12)
             bulge_curve_parameters = _current_array(self.targets.bulge_parameters)
             section_interior_points = []
-            for station in section_stations:
+            for index, station in enumerate(section_stations):
                 station_value = float(station)
+                # Where a dome band is carried, the bulb is described by the
+                # band's own endpoints, tangents and area. The waypoint was a
+                # way to fake a neck inside a single monotone keel-to-waterline
+                # curve; with the band present it would also ask the main band
+                # to pass through a point below its own lower boundary.
+                if dome_mask is not None and dome_mask[index]:
+                    section_interior_points.append(())
+                    continue
                 depth_fraction = float(
                     np.interp(station_value, fit_station_values, depth_fractions)
                 )
@@ -749,7 +775,6 @@ class FormParameterHullProblem:
         keel_half_breadths_for_sections = None
         dome_depths_for_sections = None
         dome_areas_for_sections = None
-        dome_mask = None
         if self.model_dome_band:
             keel_half_breadths_for_sections = (
                 curves[FormCurveKind.BLEND_HALF_BREADTH]
@@ -769,19 +794,6 @@ class FormParameterHullProblem:
             half_areas_for_sections = (
                 half_areas_for_sections - dome_areas_for_sections
             )
-            # Topology is decided from the observations, not from the solve.
-            observed_depths = _current_array(self.targets.dome_depths)
-            observed_blend = _current_array(self.targets.blend_depths)
-            station_values = np.asarray(fit_stations, dtype=float)
-            dome_mask = []
-            for station in section_stations:
-                value = float(station)
-                depth = float(np.interp(value, station_values, observed_depths))
-                blend = float(np.interp(value, station_values, observed_blend))
-                dome_mask.append(
-                    (depth - blend) > self.dome_depth_threshold * _scalar_value(draft)
-                )
-
         section_problem = SectionLoftProblem(
             length=length,
             station_parameters=section_stations,

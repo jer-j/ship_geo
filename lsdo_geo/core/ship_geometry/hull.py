@@ -370,10 +370,17 @@ class SectionLoftProblem:
                 half_breadth=_sequence_item(self.half_breadths, index),
                 half_area=_sequence_item(self.half_areas, index),
                 keel_tangent_angle=_sequence_item(self.keel_tangent_angles, index),
+                # A station with no dome band closes on the centreplane. The
+                # blend half-breadth is only meaningful where the section
+                # actually necks, and the fitted curve does not vanish exactly
+                # at the closure, so it is gated on the same mask as the band
+                # it belongs to.
                 keel_half_breadth=(
-                    0.0
-                    if self.keel_half_breadths is None
-                    else _sequence_item(self.keel_half_breadths, index)
+                    _sequence_item(self.keel_half_breadths, index)
+                    if self.keel_half_breadths is not None
+                    and model_dome
+                    and bool(self.dome_mask[index])
+                    else 0.0
                 ),
                 dome_depth=(
                     _sequence_item(self.dome_depths, index)
