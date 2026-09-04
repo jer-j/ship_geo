@@ -188,6 +188,7 @@ def main() -> None:
     axes[0].set_title("Deck half-breadth")
     axes[0].set_xlabel("longitudinal parameter v")
     axes[0].set_ylabel("half-breadth [m]")
+    axes[0].legend(frameon=False, fontsize=8, loc="lower left")
 
     axes[1].plot(
         fit_stations, form_data.fit_targets.deck_heights, "o", color="0.35", markersize=4
@@ -216,10 +217,6 @@ def main() -> None:
     axes[2].set_ylabel("angle [deg]")
     for axis in axes:
         axis.grid(alpha=0.2)
-    figure.legend(
-        *axes[0].get_legend_handles_labels(), loc="lower center", ncol=2, frameon=False
-    )
-    figure.subplots_adjust(bottom=0.28)
     _save(figure, arguments.output.with_name(arguments.output.stem + "_deck_curves.png"))
 
     # ---- Figure 3: SectionFullness curve --------------------------------
