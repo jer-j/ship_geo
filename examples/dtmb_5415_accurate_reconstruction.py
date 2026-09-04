@@ -73,12 +73,13 @@ def _default_section_stations(regions) -> np.ndarray:
             # bulb and the forefoot merges into a monotone profile there), so
             # the band gets five stations of its own: a cubic dome patch needs
             # four, and a fifth keeps the closure from being carried by the
-            # end span alone.
+            # end span alone. The last sits just inside the taper, so the
+            # patch runs out to nothing rather than ending at finite width.
             0.012,
             0.026,
-            0.042,
-            0.058,
-            0.070,
+            0.040,
+            0.054,
+            0.066,
             0.090,
             # The transition is lofted as its own cubic patch, so it needs at
             # least four stations of its own.
