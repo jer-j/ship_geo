@@ -852,7 +852,10 @@ class FormParameterHullProblem:
                         float(section_stations[index]), station_values, observed_blend
                     )
                 )
-                section = points[index]
+                # A copy: points[index] is overwritten below, and section
+                # would otherwise be a view onto the resampled upper arc by
+                # the time the lower half is taken from it.
+                section = points[index].copy()
                 keep = section[:, 0] >= blend_z
                 if int(np.count_nonzero(keep)) < 4:
                     continue
