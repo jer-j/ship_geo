@@ -227,6 +227,84 @@ def main() -> None:
     figure.tight_layout()
     _save(figure, arguments.output_transom)
 
+    # ---- Figure 3: forward waterlines -----------------------------------
+    # Section RMS can look acceptable while the longitudinal lines still read
+    # wrong, which is what a plan view of the waterlines shows directly.
+    levels = (-0.02, -0.06, -0.11, -0.17, -0.23)
+    forward_stations = np.linspace(0.008, 0.34, 60)
+    recorder2 = csdl.Recorder(inline=True)
+    recorder2.start()
+    exact_forward = extract_dtmb_5415_section_fit_data(reference, forward_stations)
+    recorder2.stop()
+
+    def waterline_from_sections(points_by_station, x_values, level):
+        """Half-breadth at a given height, per station."""
+        xs, ys = [], []
+        for x_value, points in zip(x_values, points_by_station):
+            z, y = points[:, 0], points[:, 1]
+            order = np.argsort(z)
+            z, y = z[order], y[order]
+            if level < z[0] or level > z[-1]:
+                continue
+            xs.append(x_value)
+            ys.append(float(np.interp(level, z, y)))
+        return np.asarray(xs), np.asarray(ys)
+
+    def waterline_from_mesh(meshes, level, x_lo, x_hi):
+        xs, ys = [], []
+        rows = []
+        for mesh in meshes:
+            if mesh is None:
+                continue
+            rows.extend(mesh[i] for i in range(mesh.shape[0]))
+        rows.sort(key=lambda row: row[:, 0].mean())
+        for row in rows:
+            x_value = float(row[:, 0].mean())
+            if not x_lo <= x_value <= x_hi:
+                continue
+            z, y = row[:, 2], row[:, 1]
+            order = np.argsort(z)
+            z, y = z[order], y[order]
+            if level < z[0] or level > z[-1]:
+                continue
+            xs.append(x_value)
+            ys.append(float(np.interp(level, z, y)))
+        return np.asarray(xs), np.asarray(ys)
+
+    figure, axis = plt.subplots(figsize=(12.0, 5.2))
+    x_lo, x_hi = x_of(0.008), x_of(0.34)
+    for index, level in enumerate(levels):
+        ex, ey = waterline_from_sections(
+            exact_forward.points, [x_of(v) for v in forward_stations], level
+        )
+        gx, gy = waterline_from_mesh([underwater, dome], level, x_lo, x_hi)
+        axis.plot(
+            ex, ey, "-", color=exact_color, linewidth=3.0, alpha=0.5,
+            label="exact IGES" if index == 0 else None,
+        )
+        axis.plot(
+            gx, gy, "-", color=main_color, linewidth=1.4,
+            label="reconstruction" if index == 0 else None,
+        )
+        if ex.size:
+            axis.annotate(
+                f"z = {level:.2f} m", (ex[-1], ey[-1]), fontsize=8,
+                xytext=(4, 0), textcoords="offset points", color="0.3",
+            )
+    axis.set_xlabel("x [m]")
+    axis.set_ylabel("y [m]  (half-breadth)")
+    axis.set_title(
+        "Forward waterlines in plan view: exact IGES (grey) vs. reconstruction"
+        " (blue)\nthe two lowest levels pass through the sonar dome"
+    )
+    axis.grid(alpha=0.25, linewidth=0.5)
+    axis.legend(frameon=False)
+    figure.tight_layout()
+    _save(
+        figure,
+        arguments.output_transom.with_name("dtmb_5415_forward_waterlines.png"),
+    )
+
     span = float(aft_edge[:, 0].max() - aft_edge[:, 0].min())
     exact_span = float(edges[:, 1].max() - edges[:, 1].min())
     print(f"generated underwater rake extent: {1.0e3 * span:.1f} mm")
