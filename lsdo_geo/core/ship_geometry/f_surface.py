@@ -44,6 +44,22 @@ def _value_array(value: Any) -> np.ndarray:
     return np.asarray(value, dtype=float)
 
 
+def _target_size(value: Any) -> int:
+    """Return a target's scalar count from static shape information."""
+    if isinstance(value, csdl.Variable):
+        return int(value.size)
+    return int(np.asarray(value, dtype=float).size)
+
+
+def _maybe_value_array(value: Any) -> np.ndarray | None:
+    """Return current numeric values, or ``None`` under a deferred recorder."""
+    if isinstance(value, csdl.Variable):
+        if value.value is None:
+            return None
+        return np.asarray(value.value, dtype=float)
+    return np.asarray(value, dtype=float)
+
+
 @dataclass(frozen=True)
 class SurfacePointConstraint:
     """A complete surface-position constraint at one parameter pair."""
@@ -283,7 +299,12 @@ class FSurfaceProblem:
         if np.any(coordinate_array < 0.0) or np.any(coordinate_array > 1.0):
             raise ValueError("surface coordinates must lie in [0, 1]^2.")
         expected_shape = (coordinate_array.shape[0], 3)
-        if _value_array(targets).shape != expected_shape:
+        target_shape = (
+            tuple(targets.shape)
+            if isinstance(targets, csdl.Variable)
+            else np.asarray(targets, dtype=float).shape
+        )
+        if target_shape != expected_shape:
             raise ValueError(
                 f"surface sample targets must have shape {expected_shape}."
             )
@@ -460,22 +481,27 @@ class FSurfaceProblem:
         }
         for constraint in self.constraints:
             if isinstance(constraint, SurfaceControlPointConstraint):
-                if constraint.indices in corners:
-                    corners[constraint.indices] = _value_array(
-                        constraint.target
-                    ).reshape(3)
+                target = _maybe_value_array(constraint.target)
+                if target is not None and constraint.indices in corners:
+                    corners[constraint.indices] = target.reshape(3)
             elif isinstance(constraint, SurfacePointConstraint):
                 u, v = constraint.coordinates
                 index = (
                     0 if np.isclose(u, 0.0) else self.num_control_points[0] - 1,
                     0 if np.isclose(v, 0.0) else self.num_control_points[1] - 1,
                 )
-                if (np.isclose(u, 0.0) or np.isclose(u, 1.0)) and (
-                    np.isclose(v, 0.0) or np.isclose(v, 1.0)
+                target = _maybe_value_array(constraint.target)
+                if (
+                    target is not None
+                    and (np.isclose(u, 0.0) or np.isclose(u, 1.0))
+                    and (np.isclose(v, 0.0) or np.isclose(v, 1.0))
                 ):
-                    corners[index] = _value_array(constraint.target).reshape(3)
+                    corners[index] = target.reshape(3)
             elif isinstance(constraint, SurfaceSamplesConstraint):
-                targets = _value_array(constraint.target).reshape((-1, 3))
+                sample_values = _maybe_value_array(constraint.target)
+                if sample_values is None:
+                    continue
+                targets = sample_values.reshape((-1, 3))
                 for coordinates, target in zip(constraint.coordinates, targets):
                     u, v = coordinates
                     if not (
@@ -533,7 +559,7 @@ class FSurfaceProblem:
 
     @staticmethod
     def _validate_target(target: Any) -> None:
-        if _value_array(target).size != 3:
+        if _target_size(target) != 3:
             raise ValueError("surface constraint targets must contain three values.")
 
     @staticmethod

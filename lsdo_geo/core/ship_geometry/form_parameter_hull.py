@@ -567,6 +567,31 @@ class FormParameterHullProblem:
                 )
                 section_interior_points.append(((parameter, waypoint),))
 
+        # Numeric starting guesses for the section control polygons. The
+        # endpoint targets themselves are CSDL expressions of the longitudinal
+        # curves, so under a deferred recorder they cannot be evaluated during
+        # graph construction. The auxiliary observations are ordinary arrays,
+        # which makes them a sound and always-available starting point.
+        hint_stations = np.asarray(fit_stations, dtype=float)
+        section_geometry_hints: list[dict[str, float]] = []
+        hint_sources = {
+            "draft": _current_array(self.targets.drafts),
+            "half_breadth": _current_array(self.targets.half_breadths),
+        }
+        if self.model_deck:
+            hint_sources["deck_height"] = _current_array(self.targets.deck_heights)
+            hint_sources["deck_half_breadth"] = _current_array(
+                self.targets.deck_half_breadths
+            )
+        for station in section_stations:
+            station_value = float(station)
+            section_geometry_hints.append(
+                {
+                    key: float(np.interp(station_value, hint_stations, values))
+                    for key, values in hint_sources.items()
+                }
+            )
+
         section_problem = SectionLoftProblem(
             length=length,
             station_parameters=section_stations,
@@ -590,6 +615,7 @@ class FormParameterHullProblem:
             deck_half_breadths=deck_half_breadths_for_sections,
             deck_tangent_angles=deck_tangent_angles_for_sections,
             section_interior_points=section_interior_points,
+            section_geometry_hints=section_geometry_hints,
             num_section_control_points=self.num_section_control_points,
             pointed_ends=(True, section_stations[-1] < 1.0),
             x_origin=self.x_origin,

@@ -45,6 +45,32 @@ def _vector2(first: Any, second: Any) -> Any:
     )
 
 
+def _linear_polygon(
+    problem: FSplineProblem,
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> np.ndarray:
+    """Return a Greville-spaced straight control polygon between two points.
+
+    Used as a numeric starting guess when the endpoint targets are CSDL
+    expressions whose values are not available during graph construction.
+    """
+    knots = np.asarray(
+        problem.space.knots[problem.space.knot_indices[0]], dtype=float
+    )
+    greville = np.asarray(
+        [
+            np.mean(knots[index + 1 : index + problem.degree + 1])
+            for index in range(problem.num_control_points)
+        ]
+    )
+    start_array = np.asarray(start, dtype=float)
+    end_array = np.asarray(end, dtype=float)
+    return (1.0 - greville[:, None]) * start_array[None, :] + greville[
+        :, None
+    ] * end_array[None, :]
+
+
 def _repeated_chine_knots(
     num_control_points: int, degree: int, chine_parameter: float
 ) -> np.ndarray:
@@ -140,6 +166,7 @@ class SectionProblem:
         num_deck_control_points: int | None = None,
         deck_degree: int | None = None,
         deck_fairness_weights: dict[int, float] | None = None,
+        initial_geometry_hint: dict[str, float] | None = None,
         name: str | None = None,
     ) -> None:
         if not 0.0 <= float(station_parameter) <= 1.0:
@@ -219,6 +246,7 @@ class SectionProblem:
                 "deck_height, deck_half_breadth, and deck_tangent_angle must be "
                 "supplied together."
             )
+        self.initial_geometry_hint = initial_geometry_hint or {}
         self.deck_problem: FSplineProblem | None = None
         if deck_given:
             self.deck_problem = FSplineProblem(
@@ -256,8 +284,28 @@ class SectionProblem:
             initial_control_points = np.linalg.lstsq(basis, target_values, rcond=None)[
                 0
             ]
+        hint = self.initial_geometry_hint
+        if initial_control_points is None and {"draft", "half_breadth"} <= hint.keys():
+            initial_control_points = _linear_polygon(
+                self.problem,
+                (-float(hint["draft"]), 0.0),
+                (0.0, float(hint["half_breadth"])),
+            )
+        topside_initial = None
+        if self.deck_problem is not None and {
+            "half_breadth",
+            "deck_height",
+            "deck_half_breadth",
+        } <= hint.keys():
+            topside_initial = _linear_polygon(
+                self.deck_problem,
+                (0.0, float(hint["half_breadth"])),
+                (float(hint["deck_height"]), float(hint["deck_half_breadth"])),
+            )
         topside_assembly = (
-            None if self.deck_problem is None else self.deck_problem.assemble(system)
+            None
+            if self.deck_problem is None
+            else self.deck_problem.assemble(system, topside_initial)
         )
         assembly = SectionAssembly(
             station_parameter=self.station_parameter,

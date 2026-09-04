@@ -50,8 +50,11 @@ def _coerce_target(value: Any) -> Any:
     return float(array) if array.ndim == 0 else array
 
 
-def _current_scalar(value: Any) -> float:
+def _current_scalar(value: Any) -> float | None:
+    """Return a scalar's current value, or ``None`` under a deferred recorder."""
     if isinstance(value, csdl.Variable):
+        if value.value is None:
+            return None
         return float(np.asarray(value.value).reshape(-1)[0])
     return float(np.asarray(value).reshape(-1)[0])
 
@@ -336,10 +339,13 @@ class FormCurveProblem:
         for constraint in self.constraints:
             if constraint.kind != "value":
                 continue
+            target = _current_scalar(constraint.target)
+            if target is None:
+                continue
             if np.isclose(constraint.parameter, 0.0):
-                start = _current_scalar(constraint.target)
+                start = target
             elif np.isclose(constraint.parameter, 1.0):
-                end = _current_scalar(constraint.target)
+                end = target
         knots = np.asarray(self.space.knots[self.space.knot_indices[0]])
         greville = np.array(
             [

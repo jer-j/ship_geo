@@ -44,8 +44,14 @@ def _sequence_length(values: Any) -> int:
 
 
 def _current_scalar(value: Any) -> float:
-    """Return a scalar's current value without changing its derivative path."""
+    """Return a scalar's current value without changing its derivative path.
+
+    Falls back to zero when the value is not yet available, which happens under
+    a deferred recorder. Only initial guesses use this path.
+    """
     if isinstance(value, csdl.Variable):
+        if value.value is None:
+            return 0.0
         return float(np.asarray(value.value).reshape(-1)[0])
     return float(value)
 
@@ -140,6 +146,7 @@ class SectionLoftProblem:
         deck_half_breadths: Sequence[Any] | csdl.Variable | None = None,
         deck_tangent_angles: Sequence[Any] | csdl.Variable | None = None,
         section_interior_points: Sequence[Any] | None = None,
+        section_geometry_hints: Sequence[dict[str, float]] | None = None,
         num_section_control_points: int = 8,
         section_degree: int = 3,
         longitudinal_degree: int = 3,
@@ -233,6 +240,11 @@ class SectionLoftProblem:
         ):
             raise ValueError("section_interior_points must match station_parameters.")
         self.section_interior_points = section_interior_points
+        if section_geometry_hints is not None and len(section_geometry_hints) != (
+            parameters.size
+        ):
+            raise ValueError("section_geometry_hints must match station_parameters.")
+        self.section_geometry_hints = section_geometry_hints
         self.num_section_control_points = int(num_section_control_points)
         self.section_degree = int(section_degree)
         self.longitudinal_degree = int(longitudinal_degree)
@@ -329,6 +341,11 @@ class SectionLoftProblem:
                     None
                     if self.section_interior_points is None
                     else self.section_interior_points[index]
+                ),
+                initial_geometry_hint=(
+                    None
+                    if self.section_geometry_hints is None
+                    else self.section_geometry_hints[index]
                 ),
                 deck_height=(
                     _sequence_item(self.deck_heights, index) if model_deck else None

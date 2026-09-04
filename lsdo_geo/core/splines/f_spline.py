@@ -39,6 +39,31 @@ def _value_array(value: Any) -> np.ndarray:
     return np.asarray(value, dtype=float)
 
 
+def _target_size(value: Any) -> int:
+    """Return a target's scalar count without evaluating it.
+
+    CSDL variable shapes are static, so this works under a deferred
+    (non-inline) recorder where computed values are not yet available.
+    """
+    if isinstance(value, csdl.Variable):
+        return int(value.size)
+    return int(np.asarray(value, dtype=float).size)
+
+
+def _maybe_value_array(value: Any) -> np.ndarray | None:
+    """Return current numeric values, or ``None`` when they are unavailable.
+
+    Under a deferred recorder the value of a computed variable does not exist
+    until the graph is executed. Initial guesses degrade to a coarser default
+    instead of failing.
+    """
+    if isinstance(value, csdl.Variable):
+        if value.value is None:
+            return None
+        return np.asarray(value.value, dtype=float)
+    return np.asarray(value, dtype=float)
+
+
 def _coerce_target(value: Any) -> Any:
     """Convert ordinary array-like targets while preserving CSDL variables."""
     if isinstance(value, csdl.Variable):
@@ -368,7 +393,7 @@ class FSplineProblem:
     def add_centroid_constraint(self, target: Any, scale: float = 1.0) -> None:
         """Add a planar area-centroid constraint."""
         self._require_planar("centroid")
-        if _value_array(target).size != 2:
+        if _target_size(target) != 2:
             raise ValueError("centroid target must contain two values.")
         self.constraints.append(CentroidConstraint(_coerce_target(target), scale))
 
@@ -504,10 +529,13 @@ class FSplineProblem:
         end = np.ones(self.physical_dimension)
         for constraint in self.constraints:
             if isinstance(constraint, PointConstraint):
+                target = _maybe_value_array(constraint.target)
+                if target is None:
+                    continue
                 if np.isclose(constraint.parameter, 0.0):
-                    start = _value_array(constraint.target).reshape(-1)
+                    start = target.reshape(-1)
                 elif np.isclose(constraint.parameter, 1.0):
-                    end = _value_array(constraint.target).reshape(-1)
+                    end = target.reshape(-1)
 
         knots = np.asarray(self.space.knots[self.space.knot_indices[0]], dtype=float)
         greville = np.asarray(
@@ -526,7 +554,10 @@ class FSplineProblem:
             for constraint in self.constraints:
                 if not isinstance(constraint, TangentAngleConstraint):
                     continue
-                angle = float(_value_array(constraint.angle).reshape(-1)[0])
+                angle_value = _maybe_value_array(constraint.angle)
+                if angle_value is None:
+                    continue
+                angle = float(angle_value.reshape(-1)[0])
                 direction = np.array([np.cos(angle), np.sin(angle)])
                 if np.isclose(constraint.parameter, 0.0):
                     initial[1] = start + tangent_distance * direction
@@ -540,7 +571,7 @@ class FSplineProblem:
             raise ValueError("constraint parameter must lie in [0, 1].")
 
     def _validate_vector_target(self, target: Any) -> None:
-        size = int(_value_array(target).size)
+        size = _target_size(target)
         if size != self.physical_dimension:
             raise ValueError(
                 f"constraint target must contain {self.physical_dimension} values, "
