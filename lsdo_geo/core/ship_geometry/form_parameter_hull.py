@@ -814,6 +814,53 @@ class FormParameterHullProblem:
             half_areas_for_sections = (
                 half_areas_for_sections - dome_areas_for_sections
             )
+        # The section-fit objective compares the main band against the
+        # reference section. Where a dome band is carried the main band spans
+        # only blend line to waterline, so fitting it against points that run
+        # all the way to the keel asks it to reproduce the bulb it no longer
+        # covers, and fights its own lower endpoint. The residual is scaled by
+        # the band's depth, which is the blend depth there, so the conflict is
+        # amplified exactly where it is worst. Resample the part of the
+        # reference that the main band actually spans.
+        section_fit_points = self.section_fit_points
+        if (
+            self.model_dome_band
+            and dome_mask is not None
+            and section_fit_points is not None
+            and self.section_fit_parameters is not None
+            and any(dome_mask)
+        ):
+            points = np.array(_current_array(section_fit_points), dtype=float)
+            parameters = np.asarray(self.section_fit_parameters, dtype=float).reshape(-1)
+            observed_blend = _current_array(self.targets.blend_depths)
+            station_values = np.asarray(fit_stations, dtype=float)
+            for index, banded in enumerate(dome_mask):
+                if not banded:
+                    continue
+                blend_z = -float(
+                    np.interp(
+                        float(section_stations[index]), station_values, observed_blend
+                    )
+                )
+                section = points[index]
+                keep = section[:, 0] >= blend_z
+                if int(np.count_nonzero(keep)) < 4:
+                    continue
+                upper = section[keep]
+                # Reparameterize the retained arc onto [0, 1] by arc length,
+                # which is the same convention the band's own parameter uses.
+                steps = np.linalg.norm(np.diff(upper, axis=0), axis=1)
+                arc = np.concatenate(([0.0], np.cumsum(steps)))
+                if arc[-1] <= 0.0:
+                    continue
+                arc /= arc[-1]
+                points[index] = np.stack(
+                    [np.interp(parameters, arc, upper[:, 0]),
+                     np.interp(parameters, arc, upper[:, 1])],
+                    axis=1,
+                )
+            section_fit_points = points
+
         section_problem = SectionLoftProblem(
             length=length,
             station_parameters=section_stations,
@@ -850,7 +897,7 @@ class FormParameterHullProblem:
             pointed_ends=(True, section_stations[-1] < 1.0),
             x_origin=self.x_origin,
             section_fit_parameters=self.section_fit_parameters,
-            section_fit_points=self.section_fit_points,
+            section_fit_points=section_fit_points,
             section_fit_weight=self.section_fit_weight,
             longitudinal_regions=self.longitudinal_regions,
             name=self.name,
