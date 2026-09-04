@@ -823,6 +823,8 @@ class FormParameterHullProblem:
         # amplified exactly where it is worst. Resample the part of the
         # reference that the main band actually spans.
         section_fit_points = self.section_fit_points
+        dome_points: np.ndarray | None = None
+        dome_fit_available: list[bool] = []
         if (
             self.model_dome_band
             and dome_mask is not None
@@ -840,6 +842,8 @@ class FormParameterHullProblem:
             parameters = np.asarray(self.section_fit_parameters, dtype=float).reshape(-1)
             observed_blend = _current_array(self.targets.blend_depths)
             station_values = np.asarray(fit_stations, dtype=float)
+            dome_points = np.zeros_like(points)
+            dome_fit_available = [False] * int(points.shape[0])
             for index, banded in enumerate(dome_mask):
                 if not banded:
                     continue
@@ -865,7 +869,27 @@ class FormParameterHullProblem:
                      np.interp(parameters, arc, upper[:, 1])],
                     axis=1,
                 )
+                # The other half of the split. Without it the bulb keeps only
+                # its area and endpoints, and its profile is free.
+                lower = section[section[:, 0] <= blend_z]
+                if lower.shape[0] >= 4:
+                    steps = np.linalg.norm(np.diff(lower, axis=0), axis=1)
+                    arc = np.concatenate(([0.0], np.cumsum(steps)))
+                    if arc[-1] > 0.0:
+                        arc /= arc[-1]
+                        # The dome band runs bottom-to-blend, the same
+                        # direction the reference samples run.
+                        dome_points[index] = np.stack(
+                            [np.interp(parameters, arc, lower[:, 0]),
+                             np.interp(parameters, arc, lower[:, 1])],
+                            axis=1,
+                        )
+                        dome_fit_available[index] = True
             section_fit_points = points
+
+        dome_fit_points = (
+            dome_points if dome_points is not None and any(dome_fit_available) else None
+        )
 
         section_problem = SectionLoftProblem(
             length=length,
@@ -892,6 +916,7 @@ class FormParameterHullProblem:
             keel_half_breadths=keel_half_breadths_for_sections,
             dome_depths=dome_depths_for_sections,
             dome_half_areas=dome_areas_for_sections,
+            dome_fit_points=dome_fit_points,
             dome_mask=dome_mask,
             num_dome_control_points=self.num_dome_control_points,
             section_interior_points=section_interior_points,

@@ -160,6 +160,7 @@ class SectionProblem:
         keel_half_breadth: Any = 0.0,
         dome_depth: Any | None = None,
         dome_half_area: Any | None = None,
+        dome_fit_points: Any | None = None,
         dome_bottom_tangent_angle: Any | None = None,
         num_dome_control_points: int | None = None,
         template: SectionTemplate = SectionTemplate.ROUND_BILGE,
@@ -189,6 +190,12 @@ class SectionProblem:
         self.name = name or f"section_{station_parameter:.4f}"
         self.draft = draft
         self.half_breadth = half_breadth
+        # The dome band is fit against the part of the reference section below
+        # the blend line, on the same parameters as the main band. Its depth
+        # scale is the section's deepest point, not the blend line the main
+        # band starts from.
+        self.dome_fit_points = dome_fit_points
+        self.dome_depth = dome_depth
         if (fit_parameters is None) != (fit_points is None):
             raise ValueError("fit_parameters and fit_points must be supplied together.")
         if fit_weight < 0.0:
@@ -374,6 +381,23 @@ class SectionProblem:
             values = assembly.curve.evaluate(self.fit_parameters)
             target = self.fit_points
             z_residual = (values[:, 0] - target[:, 0]) / self.draft
+            y_residual = (values[:, 1] - target[:, 1]) / self.half_breadth
+            system.add_objective(
+                self.fit_weight * (csdl.sum(z_residual**2) + csdl.sum(y_residual**2))
+            )
+        # Without this the bulb is described only by two endpoints, two
+        # tangents and an area, which pins how much section it encloses but
+        # not its profile.
+        if (
+            dome_assembly is not None
+            and self.dome_fit_points is not None
+            and self.fit_parameters is not None
+            and self.fit_weight
+        ):
+            values = dome_assembly.curve.evaluate(self.fit_parameters)
+            target = self.dome_fit_points
+            scale = self.draft if self.dome_depth is None else self.dome_depth
+            z_residual = (values[:, 0] - target[:, 0]) / scale
             y_residual = (values[:, 1] - target[:, 1]) / self.half_breadth
             system.add_objective(
                 self.fit_weight * (csdl.sum(z_residual**2) + csdl.sum(y_residual**2))

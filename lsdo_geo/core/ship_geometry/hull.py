@@ -165,6 +165,7 @@ class SectionLoftProblem:
         keel_half_breadths: Sequence[Any] | csdl.Variable | None = None,
         dome_depths: Sequence[Any] | csdl.Variable | None = None,
         dome_half_areas: Sequence[Any] | csdl.Variable | None = None,
+        dome_fit_points: Any | None = None,
         dome_mask: Sequence[bool] | None = None,
         num_dome_control_points: int | None = None,
         num_section_control_points: int = 8,
@@ -276,6 +277,7 @@ class SectionLoftProblem:
         self.keel_half_breadths = keel_half_breadths
         self.dome_depths = dome_depths
         self.dome_half_areas = dome_half_areas
+        self.dome_fit_points = dome_fit_points
         self.num_dome_control_points = num_dome_control_points
         if dome_mask is None:
             self.dome_mask = None
@@ -391,6 +393,12 @@ class SectionLoftProblem:
                     _sequence_item(self.dome_half_areas, index)
                     if model_dome and bool(self.dome_mask[index])
                     else None
+                ),
+                dome_fit_points=(
+                    None
+                    if self.dome_fit_points is None
+                    or not (model_dome and bool(self.dome_mask[index]))
+                    else self.dome_fit_points[index]
                 ),
                 num_dome_control_points=self.num_dome_control_points,
                 waterline_tangent_angle=_sequence_item(
