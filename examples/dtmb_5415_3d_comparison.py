@@ -37,7 +37,7 @@ def _exact_region_mesh(patch, function, resolution=(71, 71)):
     return np.asarray(values.value, dtype=float).reshape(resolution + (3,))
 
 
-def _draw_exact(axis, mesh, color="0.55", alpha=0.55, stride=1):
+def _draw_exact(axis, mesh, color="0.5", alpha=0.85, stride=1):
     axis.plot_surface(
         mesh[:, :, 0],
         mesh[:, :, 1],
@@ -65,29 +65,20 @@ def _draw_exact(axis, mesh, color="0.55", alpha=0.55, stride=1):
     )
 
 
-def _draw_generated(axis, mesh, color, stride_u=4, stride_v=8, label=None):
-    axis.plot_wireframe(
-        mesh[:, :, 0],
-        mesh[:, :, 1],
-        mesh[:, :, 2],
-        color=color,
-        linewidth=0.9,
-        rstride=stride_u,
-        cstride=stride_v,
-        alpha=0.95,
-    )
-    axis.plot_wireframe(
-        mesh[:, :, 0],
-        -mesh[:, :, 1],
-        mesh[:, :, 2],
-        color=color,
-        linewidth=0.9,
-        rstride=stride_u,
-        cstride=stride_v,
-        alpha=0.95,
-    )
+def _draw_generated(axis, mesh, color, stride_u=10, stride_v=24, label=None):
+    for sign in (1.0, -1.0):
+        axis.plot_wireframe(
+            mesh[:, :, 0],
+            sign * mesh[:, :, 1],
+            mesh[:, :, 2],
+            color=color,
+            linewidth=1.1,
+            rstride=max(1, stride_u),
+            cstride=max(1, stride_v),
+            alpha=0.9,
+        )
     if label is not None:
-        axis.plot([], [], color=color, label=label)
+        axis.plot([], [], color=color, linewidth=2.0, label=label)
 
 
 def _set_equal_aspect(axis, x, y, z):
@@ -144,15 +135,18 @@ def main() -> None:
     figure = plt.figure(figsize=(11.0, 6.5))
     axis = figure.add_subplot(111, projection="3d")
     for region, mesh in exact_meshes.items():
-        _draw_exact(axis, mesh, stride=2)
+        _draw_exact(axis, mesh, stride=1)
     _draw_generated(
-        axis, underwater, generated_color_under, stride_u=4, stride_v=8,
+        axis, underwater, generated_color_under, stride_u=20, stride_v=40,
         label="generated: underwater hull",
     )
     _draw_generated(
-        axis, freeboard, generated_color_deck, stride_u=4, stride_v=8,
+        axis, freeboard, generated_color_deck, stride_u=10, stride_v=40,
         label="generated: freeboard (new)",
     )
+    from matplotlib.patches import Patch
+
+    exact_handle = Patch(facecolor=exact_color, alpha=0.55, label="exact IGES reference")
     all_x = np.concatenate([m[:, :, 0].ravel() for m in exact_meshes.values()])
     all_y = np.concatenate(
         [m[:, :, 1].ravel() for m in exact_meshes.values()]
@@ -168,7 +162,8 @@ def main() -> None:
         "DTMB 5415: exact IGES (gray) vs. F-Spline reconstruction\n"
         "underwater hull (blue) + new freeboard surface (orange) -- single global solve"
     )
-    axis.legend(loc="upper left", frameon=False)
+    handles, labels = axis.get_legend_handles_labels()
+    axis.legend(handles=[exact_handle] + handles, loc="upper left", frameon=False)
     _save(figure, arguments.output)
 
     # ---- Figure 2: close-ups ---------------------------------------------
@@ -187,15 +182,15 @@ def main() -> None:
             if not np.any(mask_rows):
                 continue
             _draw_exact(axis, mesh[mask_rows], stride=1)
-        for mesh, color in (
-            (underwater, generated_color_under),
-            (freeboard, generated_color_deck),
+        for mesh, color, stride_v in (
+            (underwater, generated_color_under, 10),
+            (freeboard, generated_color_deck, 18),
         ):
             mask_rows = np.any((mesh[:, :, 0] >= x_lo) & (mesh[:, :, 0] <= x_hi), axis=1)
             if not np.any(mask_rows):
                 continue
             _draw_generated(
-                axis, mesh[mask_rows], color, stride_u=1, stride_v=3
+                axis, mesh[mask_rows], color, stride_u=2, stride_v=stride_v
             )
         window_x = np.concatenate(
             [
@@ -223,11 +218,20 @@ def main() -> None:
         axis.set_ylabel("y [m]", fontsize=8)
         axis.set_zlabel("z [m]", fontsize=8)
         axis.tick_params(labelsize=7)
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    legend_handles = [
+        Patch(facecolor=exact_color, alpha=0.55, label="exact IGES reference"),
+        Line2D([0], [0], color=generated_color_under, lw=2, label="generated: underwater"),
+        Line2D([0], [0], color=generated_color_deck, lw=2, label="generated: freeboard"),
+    ]
+    figure.legend(handles=legend_handles, loc="lower center", ncol=3, frameon=False)
     figure.suptitle(
         "Close-ups: exact IGES (gray, shaded) vs. generated wireframe "
         "(blue = underwater, orange = freeboard)"
     )
-    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
+    figure.tight_layout(rect=(0.0, 0.06, 1.0, 0.94))
     _save(figure, arguments.output.with_name(arguments.output.stem + "_closeups.png"))
     recorder.stop()
 
