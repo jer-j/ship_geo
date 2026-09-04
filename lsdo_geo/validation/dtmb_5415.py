@@ -419,7 +419,7 @@ def _dome_band_properties(points: np.ndarray) -> tuple[float, ...]:
 
 
 def _close_dome_band_smoothly(
-    stations: np.ndarray, columns: np.ndarray, closure_window: float = 0.012
+    stations: np.ndarray, sampled: np.ndarray, closure_window: float = 0.012
 ) -> None:
     """Taper the sonar-dome band to nothing across its closure, in place.
 
@@ -442,10 +442,33 @@ def _close_dome_band_smoothly(
     carried onto ``dome_depth`` over the same window, which is what "no
     band" means: the blend line lands on the keel.
 
-    ``columns`` is the ``(blend_depth, blend_half_breadth,
-    blend_tangent_angle, dome_depth, dome_half_area, has_dome)`` block.
+    The blend tangent needs the same treatment and matters more. The hull
+    reads it as a deadrise: the main band's lower tangent is
+    ``pi/2 - deadrise``, and where a band is carried the deadrise curve is
+    retargeted to ``pi/2 - blend_tangent`` so that tangent becomes the blend
+    tangent. At a neck the section is at a local minimum of half-breadth, so
+    the blend tangent is near zero and the retargeted deadrise is near 90
+    degrees, while with no band it is the ordinary keel deadrise of under a
+    degree. Left alone that is a 90 degree step in a curve target across
+    0.005 of the length -- far more violent than the area step, and the
+    reason an eighteen-coefficient fit diverges where a twelve-coefficient
+    one merely smooths.
+
+    So outside the dome the blend tangent is set to ``pi/2 - deadrise``,
+    which makes the retargeting reproduce the true keel deadrise instead of
+    discarding it, and across the closure it is tapered from the measured
+    neck tangent onto that value.
+
+    ``sampled`` is the full property block; deadrise is column 3 and the
+    dome band occupies columns 11 through 16.
     """
-    has_dome = columns[:, 5] > 0.5
+    deadrise = sampled[:, 3]
+    blend_depth, blend_breadth, blend_tangent = 11, 12, 13
+    dome_depth, dome_area, dome_flag = 14, 15, 16
+    has_dome = sampled[:, dome_flag] > 0.5
+    # With no band the lower tangent is the ordinary keel tangent, so the
+    # retargeting must hand back the true deadrise rather than zero.
+    sampled[~has_dome, blend_tangent] = 0.5 * np.pi - deadrise[~has_dome]
     if not np.any(has_dome) or np.all(has_dome):
         return
     last = int(np.flatnonzero(has_dome)[-1])
@@ -461,11 +484,16 @@ def _close_dome_band_smoothly(
     fraction = np.clip((stations[inside] - start) / max(closure - start, 1e-12), 0.0, 1.0)
     # smoothstep: 0 and 1 both approached with zero slope.
     weight = 1.0 - fraction * fraction * (3.0 - 2.0 * fraction)
-    columns[inside, 1] *= weight                      # blend half-breadth
-    columns[inside, 4] *= weight                      # dome half-area
-    columns[inside, 0] = (
-        weight * columns[inside, 0] + (1.0 - weight) * columns[inside, 3]
-    )                                                 # blend depth -> keel
+    sampled[inside, blend_breadth] *= weight
+    sampled[inside, dome_area] *= weight
+    sampled[inside, blend_depth] = (
+        weight * sampled[inside, blend_depth]
+        + (1.0 - weight) * sampled[inside, dome_depth]
+    )
+    sampled[inside, blend_tangent] = (
+        weight * sampled[inside, blend_tangent]
+        + (1.0 - weight) * (0.5 * np.pi - deadrise[inside])
+    )
 
 
 def _deck_section_properties(points: np.ndarray) -> tuple[float, float, float]:
@@ -593,7 +621,7 @@ def extract_dtmb_5415_form_data(
     maximum_draft_index = int(
         main_hull_indices[np.argmax(integrated[main_hull_indices, 1])]
     )
-    _close_dome_band_smoothly(np.asarray(requested, dtype=float), sampled[:, 11:])
+    _close_dome_band_smoothly(np.asarray(requested, dtype=float), sampled)
     maximum_underwater_depth = float(np.max(integrated[:, 1]))
     requested_coordinates = forward_perpendicular + length * requested
     targets = LongitudinalFitTargets(
