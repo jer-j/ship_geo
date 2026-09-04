@@ -830,7 +830,13 @@ class FormParameterHullProblem:
             and self.section_fit_parameters is not None
             and any(dome_mask)
         ):
-            points = np.array(_current_array(section_fit_points), dtype=float)
+            # _current_array flattens; the fit points are (station, sample, 2).
+            points = np.array(
+                section_fit_points.value
+                if isinstance(section_fit_points, csdl.Variable)
+                else section_fit_points,
+                dtype=float,
+            )
             parameters = np.asarray(self.section_fit_parameters, dtype=float).reshape(-1)
             observed_blend = _current_array(self.targets.blend_depths)
             station_values = np.asarray(fit_stations, dtype=float)
