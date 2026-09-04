@@ -418,6 +418,56 @@ def _dome_band_properties(points: np.ndarray) -> tuple[float, ...]:
     )
 
 
+def _close_dome_band_smoothly(
+    stations: np.ndarray, columns: np.ndarray, closure_window: float = 0.020
+) -> None:
+    """Taper the sonar-dome band to nothing across its closure, in place.
+
+    The neck does not shrink to zero at the end of the dome: its local
+    minimum and maximum merge, so ``_dome_band_properties`` flips from a
+    finite band to none between two adjacent stations. On the DTMB 5415 that
+    is a step of 32 mm in blend half-breadth and 0.008 m^2 in dome area over
+    0.005 of the length.
+
+    A longitudinal curve coarse enough to smooth that step is harmless, but
+    one with knots massed at the bow follows it, and a cubic driven through a
+    step overshoots -- to negative half-breadth and negative dome area just
+    forward of the closure, which asks the main band for more area than the
+    section contains and has no solution.
+
+    The step is an artefact of detecting the feature, not of the surface,
+    which closes smoothly. So blend the band's own quantities toward the
+    closed state over a short window ending at the closure, using a
+    smoothstep so both value and slope arrive at zero. ``blend_depth`` is
+    carried onto ``dome_depth`` over the same window, which is what "no
+    band" means: the blend line lands on the keel.
+
+    ``columns`` is the ``(blend_depth, blend_half_breadth,
+    blend_tangent_angle, dome_depth, dome_half_area, has_dome)`` block.
+    """
+    has_dome = columns[:, 5] > 0.5
+    if not np.any(has_dome) or np.all(has_dome):
+        return
+    last = int(np.flatnonzero(has_dome)[-1])
+    if last + 1 >= stations.size:
+        return
+    # The closure lies between the last station that necks and the first that
+    # does not; neither resolves it, so take the midpoint.
+    closure = 0.5 * (float(stations[last]) + float(stations[last + 1]))
+    start = closure - closure_window
+    inside = has_dome & (stations > start)
+    if not np.any(inside):
+        return
+    fraction = np.clip((stations[inside] - start) / max(closure - start, 1e-12), 0.0, 1.0)
+    # smoothstep: 0 and 1 both approached with zero slope.
+    weight = 1.0 - fraction * fraction * (3.0 - 2.0 * fraction)
+    columns[inside, 1] *= weight                      # blend half-breadth
+    columns[inside, 4] *= weight                      # dome half-area
+    columns[inside, 0] = (
+        weight * columns[inside, 0] + (1.0 - weight) * columns[inside, 3]
+    )                                                 # blend depth -> keel
+
+
 def _deck_section_properties(points: np.ndarray) -> tuple[float, float, float]:
     """Measure the deck-edge half-breadth, height, and tangent angle.
 
@@ -543,6 +593,7 @@ def extract_dtmb_5415_form_data(
     maximum_draft_index = int(
         main_hull_indices[np.argmax(integrated[main_hull_indices, 1])]
     )
+    _close_dome_band_smoothly(np.asarray(requested, dtype=float), sampled[:, 11:])
     maximum_underwater_depth = float(np.max(integrated[:, 1]))
     requested_coordinates = forward_perpendicular + length * requested
     targets = LongitudinalFitTargets(
