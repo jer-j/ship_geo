@@ -98,6 +98,12 @@ def main() -> None:
     parser.add_argument("--num-control-points", type=int, default=6)
     parser.add_argument("--max-iter", type=int, default=10)
     parser.add_argument("--print-status", action="store_true")
+    parser.add_argument(
+        "--cache",
+        type=Path,
+        default=None,
+        help="Optional .npz path to save solved surface meshes for reuse.",
+    )
     arguments = parser.parse_args()
 
     source = arguments.source
@@ -138,6 +144,19 @@ def main() -> None:
         float(np.max(np.abs(result.stationarity_residual.value))),
     )
     print("states solved simultaneously:", len(result.stationarity_residuals))
+
+    if arguments.cache is not None:
+        underwater_mesh = geometry.hull.surface.mesh((81, 161)).value
+        freeboard_mesh = geometry.hull.freeboard_surface.mesh((41, 161)).value
+        np.savez(
+            arguments.cache,
+            underwater_mesh=underwater_mesh,
+            freeboard_mesh=freeboard_mesh,
+            section_stations=section_stations,
+            length=float(form_data.primary_parameters.length_between_perpendiculars),
+            coordinate_origin=float(form_data.coordinate_origin),
+        )
+        print(f"wrote {arguments.cache}")
 
     # ---- Figure 1: body-plan comparison, keel through deck -------------
     figure, axis = plt.subplots(figsize=(7.0, 6.4))
