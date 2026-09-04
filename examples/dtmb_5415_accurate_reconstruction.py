@@ -151,6 +151,17 @@ def main() -> None:
             "main underwater band."
         ),
     )
+    parser.add_argument(
+        "--mesh-scale",
+        type=float,
+        default=0.75,
+        help=(
+            "Scales the readback mesh resolutions. These sample the solved "
+            "surface and do not enter the Newton solve, but they are dense "
+            "tensor-product evaluations inside the compiled function, so they "
+            "drive peak compile memory. Lower this if XLA runs out of memory."
+        ),
+    )
     parser.add_argument("--max-iter", type=int, default=12)
     parser.add_argument("--print-status", action="store_true")
     parser.add_argument(
@@ -297,22 +308,52 @@ def main() -> None:
     # Declare everything to read back, so the compiled graph produces it.
     result = geometry.hull.variational_result
     regional = geometry.hull.regional_surface
+
+    def resolution(rows: int, columns: int) -> tuple[int, int]:
+        scale = max(arguments.mesh_scale, 0.1)
+        return (max(int(round(rows * scale)), 9), max(int(round(columns * scale)), 9))
+
     outputs: dict[str, csdl.Variable] = {
         "constraint_residual": result.constraint_residual,
-        "underwater_mesh": geometry.hull.surface.mesh((81, 161)),
+        "underwater_mesh": geometry.hull.surface.mesh(resolution(81, 161)),
     }
     if geometry.hull.freeboard_surface is not None:
-        outputs["freeboard_mesh"] = geometry.hull.freeboard_surface.mesh((41, 161))
+        outputs["freeboard_mesh"] = geometry.hull.freeboard_surface.mesh(
+            resolution(41, 161)
+        )
     if geometry.hull.dome_surface is not None:
-        outputs["dome_mesh"] = geometry.hull.dome_surface.mesh((41, 81))
+        outputs["dome_mesh"] = geometry.hull.dome_surface.mesh(resolution(41, 81))
     if regional is not None:
         for name, patch in regional.patches.items():
-            outputs[f"patch_{name}"] = patch.mesh((61, 81))
+            outputs[f"patch_{name}"] = patch.mesh(resolution(61, 81))
     for label, data in (("fit", section_data), ("holdout", holdout_data)):
         for index, station in enumerate(data.station_parameters):
             outputs[f"{label}_section_{index}"] = regional.evaluate_section(
                 float(station), data.curve_parameters
             )
+    # Control nets are tiny next to sampled meshes, and the knot vectors are
+    # constants, so caching the coefficients lets any later figure be rebuilt
+    # at arbitrary resolution without paying for another compile.
+    surface_spaces: dict[str, tuple[np.ndarray, ...]] = {}
+    surfaces = {
+        "underwater": geometry.hull.surface,
+        "freeboard": geometry.hull.freeboard_surface,
+        "dome": geometry.hull.dome_surface,
+    }
+    if regional is not None:
+        for name, patch in regional.patches.items():
+            surfaces[f"patch_{name}"] = patch
+    for name, surface in surfaces.items():
+        if surface is None:
+            continue
+        outputs[f"coefficients_{name}"] = surface.coefficients
+        space = surface.space
+        surface_spaces[name] = (
+            np.asarray(space.degree, dtype=int),
+            np.asarray(space.coefficients_shape, dtype=int),
+            np.asarray(space.knots, dtype=float),
+        )
+
     for name, curve in (
         ("sectional_area", geometry.sectional_area_curve),
         ("waterline", geometry.waterline_curve),
@@ -406,6 +447,13 @@ def main() -> None:
     for label, data in (("fit", section_data), ("holdout", holdout_data)):
         payload[f"{label}_reference_points"] = data.points
         payload[f"{label}_curve_parameters"] = data.curve_parameters
+    for name, (degrees, shape, knots) in surface_spaces.items():
+        payload[f"space_{name}_degrees"] = degrees
+        payload[f"space_{name}_shape"] = shape
+        payload[f"space_{name}_knots"] = knots
+    for key, value in values.items():
+        if key.startswith("coefficients_"):
+            payload[key] = value
     payload["section_stations"] = section_data.station_parameters
     payload["length"] = np.asarray(
         float(form_data.primary_parameters.length_between_perpendiculars)
