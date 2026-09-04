@@ -396,9 +396,23 @@ class SectionProblem:
         ):
             values = dome_assembly.curve.evaluate(self.fit_parameters)
             target = self.dome_fit_points
-            scale = self.draft if self.dome_depth is None else self.dome_depth
-            z_residual = (values[:, 0] - target[:, 0]) / scale
-            y_residual = (values[:, 1] - target[:, 1]) / self.half_breadth
+            # Each band is scaled by its own extents. The main band uses its
+            # depth and the waterline half-breadth; the dome's extents are the
+            # section's deepest point and the bulb's widest half-breadth. The
+            # bulb is several times wider than the waterline it sits under --
+            # 0.12 against 0.015 at the forward stations -- so reusing the
+            # waterline breadth here divides the dome's residuals by a number
+            # far too small and its objective swamps the rest of the system.
+            depth_scale = self.draft if self.dome_depth is None else self.dome_depth
+            breadth_scale = self.half_breadth
+            if not isinstance(self.dome_fit_points, csdl.Variable):
+                widest = float(
+                    np.max(np.abs(np.asarray(self.dome_fit_points, dtype=float)[:, 1]))
+                )
+                if widest > 0.0:
+                    breadth_scale = widest
+            z_residual = (values[:, 0] - target[:, 0]) / depth_scale
+            y_residual = (values[:, 1] - target[:, 1]) / breadth_scale
             system.add_objective(
                 self.fit_weight * (csdl.sum(z_residual**2) + csdl.sum(y_residual**2))
             )
