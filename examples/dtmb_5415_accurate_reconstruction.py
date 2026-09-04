@@ -54,6 +54,7 @@ from lsdo_geo.validation import (
     dtmb_5415_longitudinal_regions,
     extract_dtmb_5415_form_data,
     extract_dtmb_5415_section_fit_data,
+    extract_dtmb_5415_transom_offsets,
     load_dtmb_5415,
 )
 
@@ -167,6 +168,18 @@ def main() -> None:
         DEFAULT_VALIDATION_STATIONS,
         num_curve_points=section_data.curve_parameters.size,
     )
+    transom_offsets, transom_deck_offsets, transom_info = (
+        extract_dtmb_5415_transom_offsets(
+            reference,
+            arguments.num_section_control_points,
+            arguments.num_deck_control_points,
+        )
+    )
+    print(
+        "transom edge rake extent: "
+        f"{1e3 * transom_info['rake_extent']:.1f} mm "
+        f"(x {transom_info['minimum_x']:.4f} .. {transom_info['maximum_x']:.4f})"
+    )
     extraction_recorder.stop()
     print(f"extracted {section_stations.size} generating stations "
           f"and {len(DEFAULT_VALIDATION_STATIONS)} holdout stations")
@@ -220,6 +233,8 @@ def main() -> None:
             breakpoints=(float(regions[1].end), 0.72),
             weights=(0.34, 0.33, 0.33),
         ),
+        transom_x_offsets=transom_offsets,
+        transom_deck_x_offsets=transom_deck_offsets,
         x_origin=form_data.coordinate_origin,
         longitudinal_regions=regions,
         name="dtmb_5415_accurate",

@@ -114,6 +114,7 @@ class SectionAssembly:
     fspline: FSplineAssembly
     template: SectionTemplate
     topside: FSplineAssembly | None = None
+    dome: FSplineAssembly | None = None
 
     @property
     def curve(self) -> FSplineCurve:
@@ -125,11 +126,18 @@ class SectionAssembly:
         """Unsolved freeboard curve graph, when deck data was supplied."""
         return None if self.topside is None else self.topside.curve
 
+    @property
+    def dome_curve(self) -> FSplineCurve | None:
+        """Unsolved sonar-dome curve graph, when dome data was supplied."""
+        return None if self.dome is None else self.dome.curve
+
     def finalize(self, result: VariationalResult) -> FSplineCurve:
         """Attach global KKT diagnostics and return the solved underwater curve."""
         curve = self.fspline.finalize(result)
         if self.topside is not None:
             self.topside.finalize(result)
+        if self.dome is not None:
+            self.dome.finalize(result)
         return curve
 
 
@@ -149,6 +157,11 @@ class SectionProblem:
         half_area: Any,
         keel_tangent_angle: Any = 0.0,
         waterline_tangent_angle: Any = 0.0,
+        keel_half_breadth: Any = 0.0,
+        dome_depth: Any | None = None,
+        dome_half_area: Any | None = None,
+        dome_bottom_tangent_angle: Any | None = None,
+        num_dome_control_points: int | None = None,
         template: SectionTemplate = SectionTemplate.ROUND_BILGE,
         chine_parameter: float = 0.5,
         chine_point: Any | None = None,
@@ -214,7 +227,10 @@ class SectionProblem:
             quadrature_order=quadrature_order,
             name=self.name,
         )
-        self.problem.add_point_constraint(0.0, _vector2(-draft, 0.0))
+        # The lower endpoint is the band's own lower boundary. Where a sonar
+        # dome is carried below, that boundary is the blend line rather than
+        # the centreplane keel, so it has a half-breadth of its own.
+        self.problem.add_point_constraint(0.0, _vector2(-draft, keel_half_breadth))
         self.problem.add_point_constraint(1.0, _vector2(0.0, half_breadth))
         self.problem.add_tangent_angle_constraint(0.0, keel_tangent_angle)
         self.problem.add_tangent_angle_constraint(1.0, waterline_tangent_angle)
@@ -246,6 +262,34 @@ class SectionProblem:
                 "deck_height, deck_half_breadth, and deck_tangent_angle must be "
                 "supplied together."
             )
+        # Sonar-dome band, carried below the blend line. It is a separate
+        # F-Spline that ends on the same blend point and the same blend
+        # tangent expressions the main band starts from, so position and
+        # tangent agree by construction rather than by a fitted compromise.
+        self.dome_problem: FSplineProblem | None = None
+        if dome_depth is not None:
+            self.dome_problem = FSplineProblem(
+                num_control_points=num_dome_control_points or num_control_points,
+                degree=degree,
+                physical_dimension=2,
+                fairness_weights=fairness_weights,
+                quadrature_order=quadrature_order,
+                name=f"{self.name}_dome",
+            )
+            self.dome_problem.add_point_constraint(0.0, _vector2(-dome_depth, 0.0))
+            self.dome_problem.add_tangent_angle_constraint(
+                0.0,
+                0.5 * np.pi
+                if dome_bottom_tangent_angle is None
+                else dome_bottom_tangent_angle,
+            )
+            self.dome_problem.add_point_constraint(
+                1.0, _vector2(-draft, keel_half_breadth)
+            )
+            self.dome_problem.add_tangent_angle_constraint(1.0, keel_tangent_angle)
+            if dome_half_area is not None:
+                self.dome_problem.add_area_constraint(dome_half_area)
+
         self.initial_geometry_hint = initial_geometry_hint or {}
         self.deck_problem: FSplineProblem | None = None
         if deck_given:
@@ -307,11 +351,24 @@ class SectionProblem:
             if self.deck_problem is None
             else self.deck_problem.assemble(system, topside_initial)
         )
+        dome_initial = None
+        if self.dome_problem is not None and {"draft", "dome_depth"} <= hint.keys():
+            dome_initial = _linear_polygon(
+                self.dome_problem,
+                (-float(hint["dome_depth"]), 0.0),
+                (-float(hint["draft"]), float(hint.get("keel_half_breadth", 0.0))),
+            )
+        dome_assembly = (
+            None
+            if self.dome_problem is None
+            else self.dome_problem.assemble(system, dome_initial)
+        )
         assembly = SectionAssembly(
             station_parameter=self.station_parameter,
             fspline=self.problem.assemble(system, initial_control_points),
             template=self.template,
             topside=topside_assembly,
+            dome=dome_assembly,
         )
         if self.fit_parameters is not None and self.fit_weight:
             values = assembly.curve.evaluate(self.fit_parameters)

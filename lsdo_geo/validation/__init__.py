@@ -15,6 +15,7 @@ from .dtmb_5415 import (
     dtmb_5415_longitudinal_regions,
     extract_dtmb_5415_form_data,
     extract_dtmb_5415_section_fit_data,
+    extract_dtmb_5415_transom_offsets,
     fit_dtmb_5415,
     load_dtmb_5415,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "dtmb_5415_longitudinal_regions",
     "extract_dtmb_5415_form_data",
     "extract_dtmb_5415_section_fit_data",
+    "extract_dtmb_5415_transom_offsets",
     "fit_dtmb_5415",
     "load_dtmb_5415",
     "read_polynomial_iges_surfaces",

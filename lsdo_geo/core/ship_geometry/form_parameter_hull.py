@@ -161,6 +161,11 @@ class LongitudinalFitTargets:
     bulge_half_breadths: Any | None = None
     bulge_heights: Any | None = None
     bulge_parameters: Any | None = None
+    blend_depths: Any | None = None
+    blend_half_breadths: Any | None = None
+    blend_tangent_angles: Any | None = None
+    dome_depths: Any | None = None
+    dome_half_areas: Any | None = None
 
     def validated(self) -> LongitudinalFitTargets:
         """Return a normalized target object after deterministic checks."""
@@ -249,6 +254,35 @@ class LongitudinalFitTargets:
                 if self.bulge_parameters is None
                 else _sequence_values(self.bulge_parameters, count, "bulge_parameters")
             ),
+            blend_depths=(
+                None
+                if self.blend_depths is None
+                else _sequence_values(self.blend_depths, count, "blend_depths")
+            ),
+            blend_tangent_angles=(
+                None
+                if self.blend_tangent_angles is None
+                else _sequence_values(
+                    self.blend_tangent_angles, count, "blend_tangent_angles"
+                )
+            ),
+            blend_half_breadths=(
+                None
+                if self.blend_half_breadths is None
+                else _sequence_values(
+                    self.blend_half_breadths, count, "blend_half_breadths"
+                )
+            ),
+            dome_depths=(
+                None
+                if self.dome_depths is None
+                else _sequence_values(self.dome_depths, count, "dome_depths")
+            ),
+            dome_half_areas=(
+                None
+                if self.dome_half_areas is None
+                else _sequence_values(self.dome_half_areas, count, "dome_half_areas")
+            ),
         )
 
 
@@ -271,6 +305,9 @@ class FormParameterHullGeometry:
     deck_tangent_curve: FormCurve | None = None
     bulge_breadth_curve: FormCurve | None = None
     bulge_height_curve: FormCurve | None = None
+    blend_breadth_curve: FormCurve | None = None
+    dome_depth_curve: FormCurve | None = None
+    dome_area_curve: FormCurve | None = None
 
     def recovered_primary_parameters(self) -> dict[str, csdl.Variable]:
         """Recover the exact naval particulars represented by the form curves."""
@@ -322,6 +359,9 @@ class FormParameterHullAssembly:
             deck_tangent_curve=curves.get(FormCurveKind.DECK_TANGENT),
             bulge_breadth_curve=curves.get(FormCurveKind.BULGE_HALF_BREADTH),
             bulge_height_curve=curves.get(FormCurveKind.BULGE_HEIGHT),
+            blend_breadth_curve=curves.get(FormCurveKind.BLEND_HALF_BREADTH),
+            dome_depth_curve=curves.get(FormCurveKind.DOME_DEPTH),
+            dome_area_curve=curves.get(FormCurveKind.DOME_AREA),
         )
 
 
@@ -342,6 +382,7 @@ class FormParameterHullProblem:
         num_form_control_points: int = 10,
         num_section_control_points: int = 8,
         num_deck_control_points: int | None = None,
+        num_dome_control_points: int | None = None,
         section_station_parameters: npt.ArrayLike | None = None,
         section_fit_parameters: npt.ArrayLike | None = None,
         section_fit_points: Any | None = None,
@@ -352,7 +393,10 @@ class FormParameterHullProblem:
         longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
         use_fullness_curve: bool = False,
         form_knots: npt.ArrayLike | None = None,
+        transom_x_offsets: Any | None = None,
+        transom_deck_x_offsets: Any | None = None,
         bulge_depth_threshold: float = 0.15,
+        dome_depth_threshold: float = 0.05,
         name: str = "form_parameter_hull",
     ) -> None:
         primary_parameters.validate_current_values()
@@ -370,6 +414,9 @@ class FormParameterHullProblem:
         self.num_section_control_points = int(num_section_control_points)
         self.num_deck_control_points = (
             None if num_deck_control_points is None else int(num_deck_control_points)
+        )
+        self.num_dome_control_points = (
+            None if num_dome_control_points is None else int(num_dome_control_points)
         )
         section_stations = (
             targets.station_parameters
@@ -395,10 +442,14 @@ class FormParameterHullProblem:
         self.use_fullness_curve = bool(use_fullness_curve)
         self.model_deck = targets.deck_half_breadths is not None
         self.model_bulge = targets.bulge_half_breadths is not None
+        self.model_dome_band = targets.dome_depths is not None
         self.form_knots = (
             None if form_knots is None else np.asarray(form_knots, dtype=float)
         )
+        self.transom_x_offsets = transom_x_offsets
+        self.transom_deck_x_offsets = transom_deck_x_offsets
         self.bulge_depth_threshold = float(bulge_depth_threshold)
+        self.dome_depth_threshold = float(dome_depth_threshold)
         self.name = name
 
     def solve(
@@ -496,6 +547,26 @@ class FormParameterHullProblem:
             )
             target_map[FormCurveKind.BULGE_HEIGHT] = self.targets.bulge_heights
 
+        if self.model_dome_band:
+            target_map[FormCurveKind.KEEL_PROFILE] = self.targets.blend_depths
+            target_map[FormCurveKind.DEADRISE] = (
+                0.5 * np.pi - _current_array(self.targets.blend_tangent_angles)
+            )
+            problems[FormCurveKind.BLEND_HALF_BREADTH] = self._problem(
+                FormCurveKind.BLEND_HALF_BREADTH
+            )
+            problems[FormCurveKind.DOME_DEPTH] = self._problem(
+                FormCurveKind.DOME_DEPTH
+            )
+            problems[FormCurveKind.DOME_AREA] = self._problem(
+                FormCurveKind.DOME_AREA
+            )
+            target_map[FormCurveKind.BLEND_HALF_BREADTH] = (
+                self.targets.blend_half_breadths
+            )
+            target_map[FormCurveKind.DOME_DEPTH] = self.targets.dome_depths
+            target_map[FormCurveKind.DOME_AREA] = self.targets.dome_half_areas
+
         assemblies = {
             kind: problem.assemble(
                 system,
@@ -520,6 +591,10 @@ class FormParameterHullProblem:
             FormCurveKind.DECK_TANGENT: 1.0,
             FormCurveKind.BULGE_HALF_BREADTH: 1.0 / _scalar_value(beam),
             FormCurveKind.BULGE_HEIGHT: 1.0 / _scalar_value(draft),
+            FormCurveKind.BLEND_HALF_BREADTH: 1.0 / _scalar_value(beam),
+            FormCurveKind.DOME_DEPTH: 1.0 / _scalar_value(draft),
+            FormCurveKind.DOME_AREA: 1.0
+            / (_scalar_value(beam) * _scalar_value(draft)),
         }
         for kind, assembly in assemblies.items():
             residual = scales[kind] * (
@@ -652,6 +727,11 @@ class FormParameterHullProblem:
             hint_sources["deck_half_breadth"] = _current_array(
                 self.targets.deck_half_breadths
             )
+        if self.model_dome_band:
+            hint_sources["dome_depth"] = _current_array(self.targets.dome_depths)
+            hint_sources["keel_half_breadth"] = _current_array(
+                self.targets.blend_half_breadths
+            )
         for station in section_stations:
             station_value = float(station)
             section_geometry_hints.append(
@@ -660,6 +740,47 @@ class FormParameterHullProblem:
                     for key, values in hint_sources.items()
                 }
             )
+
+        # Sonar-dome band. The main band's lower boundary becomes the blend
+        # line, and the dome carries what lies below it. The sectional-area
+        # curve still describes the *total* immersed area, so the main band
+        # receives that total minus the dome's share and the displacement and
+        # LCB constraints are untouched.
+        keel_half_breadths_for_sections = None
+        dome_depths_for_sections = None
+        dome_areas_for_sections = None
+        dome_mask = None
+        if self.model_dome_band:
+            keel_half_breadths_for_sections = (
+                curves[FormCurveKind.BLEND_HALF_BREADTH]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+            )
+            dome_depths_for_sections = (
+                curves[FormCurveKind.DOME_DEPTH]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+            )
+            dome_areas_for_sections = (
+                curves[FormCurveKind.DOME_AREA]
+                .evaluate(section_stations)
+                .reshape((num_stations,))
+            )
+            half_areas_for_sections = (
+                half_areas_for_sections - dome_areas_for_sections
+            )
+            # Topology is decided from the observations, not from the solve.
+            observed_depths = _current_array(self.targets.dome_depths)
+            observed_blend = _current_array(self.targets.blend_depths)
+            station_values = np.asarray(fit_stations, dtype=float)
+            dome_mask = []
+            for station in section_stations:
+                value = float(station)
+                depth = float(np.interp(value, station_values, observed_depths))
+                blend = float(np.interp(value, station_values, observed_blend))
+                dome_mask.append(
+                    (depth - blend) > self.dome_depth_threshold * _scalar_value(draft)
+                )
 
         section_problem = SectionLoftProblem(
             length=length,
@@ -683,8 +804,15 @@ class FormParameterHullProblem:
             deck_heights=deck_heights_for_sections,
             deck_half_breadths=deck_half_breadths_for_sections,
             deck_tangent_angles=deck_tangent_angles_for_sections,
+            keel_half_breadths=keel_half_breadths_for_sections,
+            dome_depths=dome_depths_for_sections,
+            dome_half_areas=dome_areas_for_sections,
+            dome_mask=dome_mask,
+            num_dome_control_points=self.num_dome_control_points,
             section_interior_points=section_interior_points,
             section_geometry_hints=section_geometry_hints,
+            transom_x_offsets=self.transom_x_offsets,
+            transom_deck_x_offsets=self.transom_deck_x_offsets,
             num_section_control_points=self.num_section_control_points,
             num_deck_control_points=self.num_deck_control_points,
             pointed_ends=(True, section_stations[-1] < 1.0),

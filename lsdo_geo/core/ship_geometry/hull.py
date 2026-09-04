@@ -69,6 +69,9 @@ class HullGeometry:
     regional_surface: RegionalCompatibleLoft | None = None
     freeboard_surface: TensorProductSurface | None = None
     freeboard_sections: tuple[FSplineCurve, ...] | None = None
+    dome_surface: TensorProductSurface | None = None
+    dome_sections: tuple[FSplineCurve, ...] | None = None
+    dome_station_parameters: np.ndarray | None = None
 
 
 @dataclass
@@ -81,6 +84,8 @@ class SectionLoftAssembly:
     surface_assembly: FSurfaceAssembly | None = None
     regional_surface: RegionalCompatibleLoft | None = None
     freeboard_surface: TensorProductSurface | None = None
+    dome_surface: TensorProductSurface | None = None
+    dome_station_parameters: np.ndarray | None = None
 
     def finalize(
         self,
@@ -96,6 +101,11 @@ class SectionLoftAssembly:
             freeboard_sections = tuple(
                 assembly.topside_curve for assembly in self.section_assemblies
             )
+        dome_sections = tuple(
+            assembly.dome_curve
+            for assembly in self.section_assemblies
+            if assembly.dome is not None
+        ) or None
         surface = (
             self.surface
             if self.surface_assembly is None
@@ -116,6 +126,9 @@ class SectionLoftAssembly:
             regional_surface=self.regional_surface,
             freeboard_surface=self.freeboard_surface,
             freeboard_sections=freeboard_sections,
+            dome_surface=self.dome_surface,
+            dome_sections=dome_sections,
+            dome_station_parameters=self.dome_station_parameters,
         )
 
 
@@ -147,6 +160,13 @@ class SectionLoftProblem:
         deck_tangent_angles: Sequence[Any] | csdl.Variable | None = None,
         section_interior_points: Sequence[Any] | None = None,
         section_geometry_hints: Sequence[dict[str, float]] | None = None,
+        transom_x_offsets: Any | None = None,
+        transom_deck_x_offsets: Any | None = None,
+        keel_half_breadths: Sequence[Any] | csdl.Variable | None = None,
+        dome_depths: Sequence[Any] | csdl.Variable | None = None,
+        dome_half_areas: Sequence[Any] | csdl.Variable | None = None,
+        dome_mask: Sequence[bool] | None = None,
+        num_dome_control_points: int | None = None,
         num_section_control_points: int = 8,
         num_deck_control_points: int | None = None,
         section_degree: int = 3,
@@ -246,6 +266,28 @@ class SectionLoftProblem:
         ):
             raise ValueError("section_geometry_hints must match station_parameters.")
         self.section_geometry_hints = section_geometry_hints
+        if transom_x_offsets is not None and pointed_stern:
+            raise ValueError(
+                "a raked transom requires a finite aft section; set the last "
+                "station to v = 1 so the stern is not collapsed to a point."
+            )
+        self.transom_x_offsets = transom_x_offsets
+        self.transom_deck_x_offsets = transom_deck_x_offsets
+        self.keel_half_breadths = keel_half_breadths
+        self.dome_depths = dome_depths
+        self.dome_half_areas = dome_half_areas
+        self.num_dome_control_points = num_dome_control_points
+        if dome_mask is None:
+            self.dome_mask = None
+        else:
+            mask = np.asarray(dome_mask, dtype=bool).reshape(-1)
+            if mask.size != parameters.size:
+                raise ValueError("dome_mask must match station_parameters.")
+            if int(np.count_nonzero(mask)) and int(np.count_nonzero(mask)) < 4:
+                raise ValueError(
+                    "a lofted sonar-dome band needs at least four dome stations."
+                )
+            self.dome_mask = mask
         self.num_section_control_points = int(num_section_control_points)
         self.num_deck_control_points = (
             None if num_deck_control_points is None else int(num_deck_control_points)
@@ -319,6 +361,7 @@ class SectionLoftProblem:
     def assemble(self, system: VariationalSystem) -> SectionLoftAssembly:
         """Register every section and the hull surface without running Newton."""
         model_deck = self.deck_heights is not None
+        model_dome = self.dome_depths is not None and self.dome_mask is not None
         assemblies: list[SectionAssembly] = []
         for index, parameter in enumerate(self.parameters):
             problem = SectionProblem(
@@ -327,6 +370,22 @@ class SectionLoftProblem:
                 half_breadth=_sequence_item(self.half_breadths, index),
                 half_area=_sequence_item(self.half_areas, index),
                 keel_tangent_angle=_sequence_item(self.keel_tangent_angles, index),
+                keel_half_breadth=(
+                    0.0
+                    if self.keel_half_breadths is None
+                    else _sequence_item(self.keel_half_breadths, index)
+                ),
+                dome_depth=(
+                    _sequence_item(self.dome_depths, index)
+                    if model_dome and bool(self.dome_mask[index])
+                    else None
+                ),
+                dome_half_area=(
+                    _sequence_item(self.dome_half_areas, index)
+                    if model_dome and bool(self.dome_mask[index])
+                    else None
+                ),
+                num_dome_control_points=self.num_dome_control_points,
                 waterline_tangent_angle=_sequence_item(
                     self.waterline_tangent_angles, index
                 ),
@@ -383,10 +442,21 @@ class SectionLoftProblem:
             )
             loft_parameters = np.concatenate((loft_parameters, [1.0]))
 
-        x_coordinates = [
+        x_coordinates: list[Any] = [
             self.x_origin + self.length * (parameter - 0.5)
             for parameter in loft_parameters
         ]
+        # The transom edge is a raked curve, so the aft station carries a
+        # longitudinal offset per control point instead of lying in one
+        # transverse plane. The two bands meet the edge at different heights
+        # and so carry their own offsets.
+        deck_x_coordinates = list(x_coordinates)
+        if self.transom_x_offsets is not None:
+            x_coordinates[-1] = x_coordinates[-1] + self.transom_x_offsets
+        if self.transom_deck_x_offsets is not None:
+            deck_x_coordinates[-1] = (
+                deck_x_coordinates[-1] + self.transom_deck_x_offsets
+            )
         surface_assembly: FSurfaceAssembly | None = None
         if self.surface_formulation == "compatible_loft":
             surface = CompatibleLoft.create(
@@ -439,9 +509,32 @@ class SectionLoftProblem:
             freeboard_surface = CompatibleLoft.create(
                 sections=freeboard_sections,
                 station_parameters=loft_parameters,
-                x_coordinates=x_coordinates,
+                x_coordinates=deck_x_coordinates,
                 longitudinal_degree=self.longitudinal_degree,
                 name=f"{self.name}_freeboard_surface",
+            )
+
+        # The sonar-dome band is a partial-length patch: it exists only where
+        # the section actually necks, and it is lofted over that subset rather
+        # than being carried degenerately along the whole hull.
+        dome_surface: TensorProductSurface | None = None
+        dome_stations: np.ndarray | None = None
+        if model_dome and int(np.count_nonzero(self.dome_mask)):
+            indices = np.flatnonzero(self.dome_mask)
+            dome_stations = self.parameters[indices]
+            dome_curves = [assemblies[int(i)].dome_curve for i in indices]
+            dome_x = [
+                self.x_origin + self.length * (float(p) - 0.5) for p in dome_stations
+            ]
+            local = (dome_stations - dome_stations[0]) / (
+                dome_stations[-1] - dome_stations[0]
+            )
+            dome_surface = CompatibleLoft.create(
+                sections=dome_curves,
+                station_parameters=local,
+                x_coordinates=dome_x,
+                longitudinal_degree=min(self.longitudinal_degree, len(dome_curves) - 1),
+                name=f"{self.name}_dome_surface",
             )
 
         return SectionLoftAssembly(
@@ -451,6 +544,8 @@ class SectionLoftProblem:
             surface_assembly=surface_assembly,
             regional_surface=regional_surface,
             freeboard_surface=freeboard_surface,
+            dome_surface=dome_surface,
+            dome_station_parameters=dome_stations,
         )
 
     def _assemble_variational_surface(

@@ -207,9 +207,21 @@ class CompatibleLoft:
         section_points: list[csdl.Variable] = []
         for section, x_coordinate in zip(sections, x_values):
             coefficients = section.coefficients
-            z = coefficients[:, 0].reshape((coefficients.shape[0], 1))
-            y = coefficients[:, 1].reshape((coefficients.shape[0], 1))
-            x = 0.0 * z + x_coordinate
+            count = coefficients.shape[0]
+            z = coefficients[:, 0].reshape((count, 1))
+            y = coefficients[:, 1].reshape((count, 1))
+            # A station's longitudinal position may vary along the section
+            # rather than being a single plane. A transom is raked, so the
+            # aft termination is a curve in x, not a constant-x cut.
+            size = (
+                int(x_coordinate.size)
+                if isinstance(x_coordinate, (csdl.Variable, np.ndarray))
+                else 1
+            )
+            if size == count and count != 1:
+                x = 0.0 * z + x_coordinate.reshape((count, 1))
+            else:
+                x = 0.0 * z + x_coordinate
             section_points.append(csdl.concatenate((x, y, z), axis=1))
 
         transverse_count = sections[0].coefficients.shape[0]

@@ -378,6 +378,46 @@ def _bulge_section_properties(points: np.ndarray) -> tuple[float, float, float]:
     return float(y[widest]), float(z[widest]), parameter
 
 
+def _dome_band_properties(points: np.ndarray) -> tuple[float, ...]:
+    """Split an underwater section into a hull band and a sonar-dome band.
+
+    The blend line is the top of the dome: the local minimum in half-breadth
+    above the bulb, where the dome necks back toward the centreplane. Aft of
+    the dome the section is monotone and there is no such minimum, so the
+    blend line degenerates onto the keel and the dome band is absent.
+
+    Returns ``(blend_depth, blend_half_breadth, blend_tangent_angle,
+    dome_depth, dome_half_area, has_dome)``.
+    """
+    underwater = _underwater_section_curve(points)
+    z = underwater[:, 2]
+    y = underwater[:, 1]
+    keel_depth = float(-z[0])
+    widest = int(np.argmax(y))
+    no_dome = (keel_depth, 0.0, 0.5 * np.pi, keel_depth, 0.0, 0.0)
+    if widest >= y.size - 3:
+        return no_dome
+    neck = widest + 1 + int(np.argmin(y[widest + 1 :]))
+    if neck >= y.size - 2 or y[neck] >= y[widest] - 1.0e-4:
+        return no_dome
+    blend_depth = float(-z[neck])
+    blend_half_breadth = float(y[neck])
+    # Tangent of the section where the two bands meet, in the same
+    # atan2(dy, dz) convention the section endpoints use.
+    lower = max(neck - 1, 0)
+    upper = min(neck + 1, y.size - 1)
+    blend_tangent = float(np.arctan2(y[upper] - y[lower], z[upper] - z[lower]))
+    dome_area = float(abs(np.trapz(y[: neck + 1], z[: neck + 1])))
+    return (
+        blend_depth,
+        blend_half_breadth,
+        blend_tangent,
+        keel_depth,
+        dome_area,
+        1.0,
+    )
+
+
 def _deck_section_properties(points: np.ndarray) -> tuple[float, float, float]:
     """Measure the deck-edge half-breadth, height, and tangent angle.
 
@@ -466,7 +506,7 @@ def extract_dtmb_5415_form_data(
         return DTMB5415Region.MAIN_HULL
 
     def properties(parameters: np.ndarray) -> np.ndarray:
-        output = np.zeros((parameters.size, 11))
+        output = np.zeros((parameters.size, 17))
         for index, parameter in enumerate(parameters):
             x_coordinate = forward_perpendicular + length * float(parameter)
             region = region_at(x_coordinate)
@@ -479,7 +519,8 @@ def extract_dtmb_5415_form_data(
             )
             output[index, :5] = _underwater_section_properties(points)
             output[index, 5:8] = _deck_section_properties(points)
-            output[index, 8:] = _bulge_section_properties(points)
+            output[index, 8:11] = _bulge_section_properties(points)
+            output[index, 11:] = _dome_band_properties(points)
         return output
 
     integration_parameters = np.linspace(0.005, 1.0, integration_station_count)
@@ -519,6 +560,11 @@ def extract_dtmb_5415_form_data(
         bulge_half_breadths=sampled[:, 8],
         bulge_heights=sampled[:, 9],
         bulge_parameters=sampled[:, 10],
+        blend_depths=sampled[:, 11],
+        blend_half_breadths=sampled[:, 12],
+        blend_tangent_angles=sampled[:, 13],
+        dome_depths=sampled[:, 14],
+        dome_half_areas=sampled[:, 15],
     )
     return DTMB5415FormData(
         primary_parameters=NavalHullParameters(
@@ -627,6 +673,65 @@ def extract_dtmb_5415_section_fit_data(
         longitudinal_coordinates=coordinates,
         station_regions=tuple(regions),
     )
+
+
+def extract_dtmb_5415_transom_offsets(
+    reference: DTMB5415Reference,
+    num_section_control_points: int,
+    num_deck_control_points: int,
+    degree: int = 3,
+    num_samples: int = 121,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+    """Fit per-control-point longitudinal offsets for the raked transom edge.
+
+    The aft boundary of the main-hull face is not a constant-``x`` cut: it
+    spans roughly 29 mm in ``x`` and reaches past the aft perpendicular. A loft
+    that ends on a transverse plane therefore cannot land on it. Sampling the
+    edge and fitting its longitudinal offset in each band's own transverse
+    basis lets the aft station rake instead.
+
+    Returns the underwater offsets, the freeboard offsets, and a summary of the
+    edge geometry.
+    """
+    functions = reference.build_functions()
+    patch = reference.patches[DTMB5415Region.MAIN_HULL]
+    coordinates = np.column_stack(
+        (np.ones(num_samples), np.linspace(0.0, 1.0, num_samples))
+    )
+    edge = np.asarray(
+        patch.evaluate(functions[DTMB5415Region.MAIN_HULL], coordinates).value,
+        dtype=float,
+    )
+    edge = edge[np.argsort(edge[:, 2])]
+    aft_perpendicular = float(np.mean(edge[:, 0]))
+
+    def fit(points: np.ndarray, count: int) -> np.ndarray:
+        if points.shape[0] < 3:
+            return np.zeros(count)
+        curve = points[:, [2, 1]]
+        lengths = np.linalg.norm(np.diff(curve, axis=0), axis=1)
+        cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+        if cumulative[-1] <= 0.0:
+            return np.zeros(count)
+        cumulative /= cumulative[-1]
+        space = lfs.BSplineSpace(
+            num_parametric_dimensions=1,
+            degree=(degree,),
+            coefficients_shape=(count,),
+        )
+        basis = space.compute_basis_matrix(cumulative[:, None]).toarray()
+        offsets = points[:, 0] - aft_perpendicular
+        return np.linalg.lstsq(basis, offsets, rcond=None)[0]
+
+    underwater = fit(edge[edge[:, 2] <= 0.0], num_section_control_points)
+    freeboard = fit(edge[edge[:, 2] >= 0.0], num_deck_control_points)
+    summary = {
+        "aft_perpendicular": aft_perpendicular,
+        "minimum_x": float(np.min(edge[:, 0])),
+        "maximum_x": float(np.max(edge[:, 0])),
+        "rake_extent": float(np.ptp(edge[:, 0])),
+    }
+    return underwater, freeboard, summary
 
 
 def dtmb_5415_longitudinal_regions(
