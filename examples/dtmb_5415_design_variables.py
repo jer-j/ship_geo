@@ -41,8 +41,10 @@ from lsdo_geo.core.ship_geometry.form_parameter_hull import (
     LongitudinalFitTargets,
     NavalHullParameters,
 )
+from lsdo_geo.core.ship_geometry.form_curves import piecewise_open_knots
 from lsdo_geo.validation import (
     download_dtmb_5415,
+    dtmb_5415_longitudinal_regions,
     extract_dtmb_5415_form_data,
     extract_dtmb_5415_section_fit_data,
     load_dtmb_5415,
@@ -59,8 +61,9 @@ def _save(figure: plt.Figure, path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path)
-    parser.add_argument("--num-stations", type=int, default=7)
-    parser.add_argument("--num-form-control-points", type=int, default=8)
+    parser.add_argument("--num-stations", type=int, default=7,
+        help="Stations aft of the dome; three dome stations are added.")
+    parser.add_argument("--num-form-control-points", type=int, default=14)
     parser.add_argument("--num-section-control-points", type=int, default=7)
     parser.add_argument(
         "--output",
@@ -80,9 +83,30 @@ def main() -> None:
     extraction.start()
     reference = load_dtmb_5415(source)
     form_data = extract_dtmb_5415_form_data(reference)
-    stations = np.linspace(0.08, 1.0, arguments.num_stations)
+    regions = dtmb_5415_longitudinal_regions(reference, form_data)
+    dome_end = float(regions[1].end)
+    # Observations and stations must resolve the dome, or the dome design
+    # variable is inert: a bulb described by one observation cannot respond to
+    # being asked to widen.
+    observations = np.concatenate(
+        (np.linspace(0.004, dome_end, 12), np.linspace(dome_end + 0.04, 1.0, 14))
+    )
+    form_data = extract_dtmb_5415_form_data(
+        reference, station_parameters=observations
+    )
+    stations = np.concatenate(
+        (
+            np.array([0.02, 0.05, 0.09]),
+            np.linspace(0.20, 1.0, arguments.num_stations),
+        )
+    )
     section_data = extract_dtmb_5415_section_fit_data(reference, stations)
     extraction.stop()
+    print(
+        f"observations: {observations.size} "
+        f"({int(np.sum(observations <= dome_end))} in the dome), "
+        f"generating stations: {stations.size}"
+    )
     baseline = form_data.fit_targets
     primaries = form_data.primary_parameters
     print(f"reconstructed baseline from {stations.size} DTMB 5415 stations")
@@ -151,6 +175,10 @@ def main() -> None:
         section_fit_weight=250.0,
         form_fit_weight=100.0,
         use_fullness_curve=True,
+        form_knots=piecewise_open_knots(
+            arguments.num_form_control_points, 3,
+            breakpoints=(dome_end, 0.72), weights=(0.34, 0.33, 0.33),
+        ),
         x_origin=form_data.coordinate_origin,
         name="dtmb_5415_design",
     )
