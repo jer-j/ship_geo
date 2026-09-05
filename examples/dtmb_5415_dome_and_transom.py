@@ -125,8 +125,21 @@ def main() -> None:
         if main_section is not None:
             axis.plot(
                 main_section[:, 1], main_section[:, 2], "-", color=main_color,
-                linewidth=1.5, label="main band",
+                linewidth=1.5,
+                label="one curve, keel to deck" if dome is None else "main band",
             )
+            if dome is None:
+                # The blend line and the waterline are interior conditions on
+                # this curve, at fixed parameters; mark where they land.
+                for fraction, colour, name in (
+                    (0.30, "#009e73", "blend line"),
+                    (0.65, "#d55e00", "waterline"),
+                ):
+                    index = int(round(fraction * (main_section.shape[0] - 1)))
+                    axis.plot(
+                        main_section[index, 1], main_section[index, 2], "o",
+                        color=colour, markersize=4.5, zorder=5, label=name,
+                    )
         dome_section = _section_at(dome, x_target)
         if dome_section is not None:
             axis.plot(
@@ -145,7 +158,7 @@ def main() -> None:
         axis.set_aspect("equal", adjustable="datalim")
     np.atleast_1d(axes)[0].set_ylabel("z [m]")
     handles, labels = np.atleast_1d(axes)[0].get_legend_handles_labels()
-    if len(handles) < 4:
+    if len(handles) < 3:
         for candidate in np.atleast_1d(axes):
             handles, labels = candidate.get_legend_handles_labels()
             if len(handles) >= 4:
@@ -155,9 +168,9 @@ def main() -> None:
         bbox_to_anchor=(0.5, -0.06),
     )
     figure.suptitle(
-        "DTMB 5415: the blend line runs the whole hull -- the neck above the sonar "
-        "dome where there is one,\nand a fixed fraction of the local depth aft of "
-        "it. Everything below it is a band of its own.",
+        "DTMB 5415 sections as one F-Spline from keel to deck edge. The blend line "
+        "and the waterline\nare interior conditions on that curve, not places where "
+        "one curve stops and another starts.",
         fontsize=11,
     )
     figure.tight_layout()

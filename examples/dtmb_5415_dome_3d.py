@@ -110,11 +110,19 @@ def main() -> None:
     dome_colour, main_colour, seam_colour = "#009e73", "#0072b2", "#d55e00"
     figure = plt.figure(figsize=(16.5, 5.4))
 
-    views = [
-        ("sonar dome and the hull above it", 22, -62),
-        ("looking up from below and forward", -18, -128),
-        ("the band runs the whole length", 16, -68),
-    ]
+    views = (
+        [
+            ("the bow, keel to deck edge in one surface", 22, -62),
+            ("looking up from below and forward", -18, -128),
+            ("one patch, stem to transom", 16, -68),
+        ]
+        if unified
+        else [
+            ("sonar dome and the hull above it", 22, -62),
+            ("looking up from below and forward", -18, -128),
+            ("the band runs the whole length", 16, -68),
+        ]
+    )
     for index, (title, elev, azim) in enumerate(views):
         axis = figure.add_subplot(1, 3, index + 1, projection="3d")
         upper = main if index == 2 else main_near
