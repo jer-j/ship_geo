@@ -214,6 +214,31 @@ def main() -> None:
         f"{1e3 * transom_info['rake_extent']:.1f} mm "
         f"(x {transom_info['minimum_x']:.4f} .. {transom_info['maximum_x']:.4f})"
     )
+    # The rake is a profile along the girth of a keel-to-waterline section.
+    # With a lower band carried below the blend line the underwater face is
+    # two bands, so the profile is split at the blend and resampled onto each
+    # band's own control points. Both sides take the same value at the split,
+    # which keeps the shared blend point at one x.
+    blend_fraction = float(
+        np.asarray(form_data.fit_targets.blend_depths, dtype=float).reshape(-1)[-1]
+        / np.asarray(form_data.fit_targets.dome_depths, dtype=float).reshape(-1)[-1]
+    )
+    girth = np.linspace(0.0, 1.0, np.asarray(transom_offsets).size)
+    dome_transom_offsets = np.interp(
+        np.linspace(0.0, blend_fraction, arguments.num_dome_control_points),
+        girth,
+        np.asarray(transom_offsets, dtype=float),
+    )
+    transom_offsets = np.interp(
+        np.linspace(blend_fraction, 1.0, arguments.num_section_control_points),
+        girth,
+        np.asarray(transom_offsets, dtype=float),
+    )
+    print(
+        f"  rake split at the blend, {blend_fraction:.3f} of depth: "
+        f"lower band {1e3 * dome_transom_offsets.ptp():.1f} mm, "
+        f"upper band {1e3 * transom_offsets.ptp():.1f} mm"
+    )
     extraction_recorder.stop()
     print(f"extracted {section_stations.size} generating stations "
           f"and {len(DEFAULT_VALIDATION_STATIONS)} holdout stations")
@@ -221,11 +246,12 @@ def main() -> None:
     # Report which generating stations will carry a sonar-dome band, using the
     # same rule the solver applies, so a starved dome patch is visible before
     # the expensive compile rather than after it.
+    # The blend line runs the whole length, so every station should qualify;
+    # the check below is what guarantees both bands loft on the same stations.
     dome_depths = np.asarray(form_data.fit_targets.dome_depths, dtype=float).reshape(-1)
     blend_depths = np.asarray(
         form_data.fit_targets.blend_depths, dtype=float
     ).reshape(-1)
-    draft_value = float(np.asarray(form_data.primary_parameters.draft).reshape(-1)[0])
     banded = [
         float(station)
         for station in section_stations
@@ -233,7 +259,7 @@ def main() -> None:
             np.interp(float(station), observation_stations, dome_depths)
             - np.interp(float(station), observation_stations, blend_depths)
         )
-        > 0.05 * draft_value
+        > 0.05 * np.interp(float(station), observation_stations, dome_depths)
     ]
     print(
         f"sonar-dome band on {len(banded)} generating stations: "
@@ -241,8 +267,13 @@ def main() -> None:
     )
     if len(banded) < 4:
         raise SystemExit(
-            f"the dome patch needs at least four generating stations, got "
-            f"{len(banded)}; add stations forward of the dome closure."
+            f"the lower band needs at least four generating stations, got "
+            f"{len(banded)}."
+        )
+    if len(banded) != len(section_stations):
+        print(
+            "  note: the band is not full length, so it is lofted on its own "
+            "stations and meets the hull patch only where they coincide."
         )
 
     targets = form_data.fit_targets
@@ -297,6 +328,7 @@ def main() -> None:
         ),
         transom_x_offsets=transom_offsets,
         transom_deck_x_offsets=transom_deck_offsets,
+        dome_transom_x_offsets=dome_transom_offsets,
         x_origin=form_data.coordinate_origin,
         longitudinal_regions=regions,
         name="dtmb_5415_accurate",

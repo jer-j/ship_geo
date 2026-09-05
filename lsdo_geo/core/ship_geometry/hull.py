@@ -162,6 +162,7 @@ class SectionLoftProblem:
         section_geometry_hints: Sequence[dict[str, float]] | None = None,
         transom_x_offsets: Any | None = None,
         transom_deck_x_offsets: Any | None = None,
+        dome_transom_x_offsets: Any | None = None,
         keel_half_breadths: Sequence[Any] | csdl.Variable | None = None,
         dome_depths: Sequence[Any] | csdl.Variable | None = None,
         dome_half_areas: Sequence[Any] | csdl.Variable | None = None,
@@ -274,6 +275,7 @@ class SectionLoftProblem:
             )
         self.transom_x_offsets = transom_x_offsets
         self.transom_deck_x_offsets = transom_deck_x_offsets
+        self.dome_transom_x_offsets = dome_transom_x_offsets
         self.keel_half_breadths = keel_half_breadths
         self.dome_depths = dome_depths
         self.dome_half_areas = dome_half_areas
@@ -465,12 +467,20 @@ class SectionLoftProblem:
         # longitudinal offset per control point instead of lying in one
         # transverse plane. The two bands meet the edge at different heights
         # and so carry their own offsets.
+        # Each copy is taken before any offset is applied, since the rake is a
+        # profile along the girth and every band needs the part of it that
+        # covers its own control points.
         deck_x_coordinates = list(x_coordinates)
+        dome_x_coordinates = list(x_coordinates)
         if self.transom_x_offsets is not None:
             x_coordinates[-1] = x_coordinates[-1] + self.transom_x_offsets
         if self.transom_deck_x_offsets is not None:
             deck_x_coordinates[-1] = (
                 deck_x_coordinates[-1] + self.transom_deck_x_offsets
+            )
+        if self.dome_transom_x_offsets is not None:
+            dome_x_coordinates[-1] = (
+                dome_x_coordinates[-1] + self.dome_transom_x_offsets
             )
         surface_assembly: FSurfaceAssembly | None = None
         if self.surface_formulation == "compatible_loft":
@@ -553,7 +563,7 @@ class SectionLoftProblem:
                 dome_surface = CompatibleLoft.create(
                     sections=dome_curves,
                     station_parameters=loft_parameters,
-                    x_coordinates=x_coordinates,
+                    x_coordinates=dome_x_coordinates,
                     longitudinal_degree=self.longitudinal_degree,
                     name=f"{self.name}_dome_surface",
                 )

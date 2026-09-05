@@ -402,6 +402,7 @@ class FormParameterHullProblem:
         form_knots: npt.ArrayLike | None = None,
         transom_x_offsets: Any | None = None,
         transom_deck_x_offsets: Any | None = None,
+        dome_transom_x_offsets: Any | None = None,
         bulge_depth_threshold: float = 0.15,
         dome_depth_threshold: float = 0.05,
         name: str = "form_parameter_hull",
@@ -448,13 +449,22 @@ class FormParameterHullProblem:
         )
         self.use_fullness_curve = bool(use_fullness_curve)
         self.model_deck = targets.deck_half_breadths is not None
-        self.model_bulge = targets.bulge_half_breadths is not None
+        # The bulge waypoint was a way to fake a neck inside a single monotone
+        # keel-to-waterline curve. A lower band carried the whole length
+        # describes the bulb with its own endpoints, tangents and area, and
+        # the waypoint is skipped at every banded station, so its two
+        # longitudinal curves would be fitted and then never read.
+        self.model_bulge = (
+            targets.bulge_half_breadths is not None
+            and targets.dome_depths is None
+        )
         self.model_dome_band = targets.dome_depths is not None
         self.form_knots = (
             None if form_knots is None else np.asarray(form_knots, dtype=float)
         )
         self.transom_x_offsets = transom_x_offsets
         self.transom_deck_x_offsets = transom_deck_x_offsets
+        self.dome_transom_x_offsets = dome_transom_x_offsets
         self.bulge_depth_threshold = float(bulge_depth_threshold)
         self.dome_depth_threshold = float(dome_depth_threshold)
         self.name = name
@@ -959,6 +969,7 @@ class FormParameterHullProblem:
             section_geometry_hints=section_geometry_hints,
             transom_x_offsets=self.transom_x_offsets,
             transom_deck_x_offsets=self.transom_deck_x_offsets,
+            dome_transom_x_offsets=self.dome_transom_x_offsets,
             num_section_control_points=self.num_section_control_points,
             num_deck_control_points=self.num_deck_control_points,
             pointed_ends=(True, section_stations[-1] < 1.0),
