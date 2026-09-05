@@ -81,6 +81,73 @@ def test_curvature_and_moments_for_exact_parabola():
     recorder.stop()
 
 
+def test_exact_nonplanar_cubic_and_spatial_curvature():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+
+    problem = FSplineProblem(
+        num_control_points=4,
+        degree=3,
+        physical_dimension=3,
+        fairness_weights={2: 1.0},
+        name="spatial_cubic",
+    )
+    problem.add_point_constraint(0.0, [0.0, 0.0, 0.0])
+    problem.add_point_constraint(1.0, [1.0, 1.0, 1.0])
+    problem.add_derivative_constraint(0.0, 1, [1.0, 0.0, 0.0])
+    problem.add_derivative_constraint(1.0, 1, [1.0, 2.0, 3.0])
+    curve = problem.solve()
+
+    parameters = np.linspace(0.0, 1.0, 17)
+    expected = np.column_stack((parameters, parameters**2, parameters**3))
+    np.testing.assert_allclose(curve.evaluate(parameters).value, expected, atol=2e-11)
+
+    velocity = np.array([1.0, 1.0, 0.75])
+    acceleration = np.array([0.0, 2.0, 3.0])
+    expected_curvature = np.linalg.norm(np.cross(velocity, acceleration)) / (
+        np.linalg.norm(velocity) ** 3
+    )
+    np.testing.assert_allclose(
+        curve.curvature_magnitude(0.5).value,
+        [expected_curvature],
+        atol=2e-11,
+    )
+
+    sample = curve.evaluate([0.0, 0.25, 0.5, 1.0]).value
+    volume = np.linalg.det((sample[1:] - sample[0]).T)
+    assert abs(volume) > 1.0e-4
+    assert np.max(np.abs(curve.constraint_residual.value)) < 1.0e-10
+    recorder.stop()
+
+
+def test_spatial_tangent_direction_constraint():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+
+    start_direction = np.array([1.0, 0.0, 1.0])
+    end_direction = np.array([1.0, 1.0, 0.0])
+    problem = FSplineProblem(
+        num_control_points=6,
+        degree=3,
+        physical_dimension=3,
+        name="spatial_direction",
+    )
+    problem.add_point_constraint(0.0, [0.0, 0.0, 0.0])
+    problem.add_point_constraint(1.0, [3.0, 2.0, 1.0])
+    problem.add_tangent_direction_constraint(0.0, start_direction)
+    problem.add_tangent_direction_constraint(1.0, end_direction)
+    problem.add_curvature_magnitude_constraint(0.5, 0.4)
+    curve = problem.solve()
+
+    start_tangent = curve.evaluate(0.0, derivative_order=1).value.reshape(3)
+    end_tangent = curve.evaluate(1.0, derivative_order=1).value.reshape(3)
+    assert np.linalg.norm(np.cross(start_tangent, start_direction)) < 1.0e-10
+    assert np.linalg.norm(np.cross(end_tangent, end_direction)) < 1.0e-10
+    np.testing.assert_allclose(curve.curvature_magnitude(0.5).value, [0.4], atol=1e-10)
+    assert np.max(np.abs(curve.constraint_residual.value)) < 1.0e-10
+    recorder.stop()
+
+
 def test_implicit_area_derivative_is_preserved():
     recorder = csdl.Recorder(inline=True)
     recorder.start()

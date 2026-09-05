@@ -22,10 +22,12 @@ from .constraints import (
     AreaConstraint,
     CentroidConstraint,
     CurvatureConstraint,
+    CurvatureMagnitudeConstraint,
     DerivativeConstraint,
     FSplineConstraint,
     PointConstraint,
     TangentAngleConstraint,
+    TangentDirectionConstraint,
 )
 from .variational import ConstraintHandle, VariationalResult, VariationalSystem
 
@@ -154,6 +156,34 @@ class FSplineCurve:
         numerator = first[0] * second[1] - first[1] * second[0]
         speed_squared = csdl.sum(first**2)
         return numerator / (speed_squared + epsilon) ** 1.5
+
+    def curvature_magnitude(
+        self, parameter: float, epsilon: float = 1.0e-28
+    ) -> csdl.Variable:
+        r"""Evaluate unsigned curvature for a curve in any physical dimension.
+
+        For velocity :math:`\mathbf v` and acceleration :math:`\mathbf a`, the
+        normal acceleration is projected without a dimension-specific cross
+        product. The returned scalar is
+
+        .. math::
+
+            \kappa = \frac{\lVert\mathbf a
+            -(\mathbf v\cdot\mathbf a)\mathbf v/\lVert\mathbf v\rVert^2
+            \rVert}{\lVert\mathbf v\rVert^2}.
+        """
+        first = self.evaluate(parameter, derivative_order=1).reshape(
+            (self.physical_dimension,)
+        )
+        second = self.evaluate(parameter, derivative_order=2).reshape(
+            (self.physical_dimension,)
+        )
+        speed_squared = csdl.sum(first**2)
+        tangential_projection = csdl.sum(first * second) / (speed_squared + epsilon)
+        normal_acceleration = second - tangential_projection * first
+        return csdl.sqrt(csdl.sum(normal_acceleration**2) + epsilon) / (
+            speed_squared + epsilon
+        )
 
     def area_moments(
         self,
@@ -355,6 +385,36 @@ class FSplineProblem:
             TangentAngleConstraint(parameter, _coerce_target(angle), scale)
         )
 
+    def add_tangent_direction_constraint(
+        self,
+        parameter: float,
+        direction: Any,
+        scale: float = 1.0,
+    ) -> None:
+        """Constrain tangent direction without prescribing tangent magnitude.
+
+        The direction may be a NumPy array or a differentiable CSDL vector.
+        The component with the largest current magnitude is used as a fixed
+        pivot, producing ``physical_dimension - 1`` independent collinearity
+        equations. Direction sign is selected by the initial control polygon.
+        """
+        if self.physical_dimension < 2:
+            raise ValueError("tangent direction requires at least two dimensions.")
+        self._validate_parameter(parameter)
+        self._validate_vector_target(direction)
+        current = _value_array(direction).reshape(-1)
+        if not np.all(np.isfinite(current)) or np.linalg.norm(current) == 0.0:
+            raise ValueError("tangent direction must be finite and nonzero.")
+        pivot = int(np.argmax(np.abs(current)))
+        self.constraints.append(
+            TangentDirectionConstraint(
+                parameter,
+                _coerce_target(direction),
+                pivot,
+                scale,
+            )
+        )
+
     def add_curvature_constraint(
         self, parameter: float, target: Any, scale: float = 1.0
     ) -> None:
@@ -365,6 +425,22 @@ class FSplineProblem:
         self._validate_parameter(parameter)
         self.constraints.append(
             CurvatureConstraint(parameter, _coerce_target(target), scale)
+        )
+
+    def add_curvature_magnitude_constraint(
+        self, parameter: float, target: Any, scale: float = 1.0
+    ) -> None:
+        """Add an unsigned curvature constraint in any physical dimension."""
+        if self.degree < 2:
+            raise ValueError("curvature constraints require degree >= 2.")
+        self._validate_parameter(parameter)
+        current = _value_array(target).reshape(-1)
+        if current.size != 1 or not np.all(np.isfinite(current)):
+            raise ValueError("curvature target must be one finite scalar.")
+        if current[0] < 0.0:
+            raise ValueError("curvature magnitude target must be nonnegative.")
+        self.constraints.append(
+            CurvatureMagnitudeConstraint(parameter, _coerce_target(target), scale)
         )
 
     def add_area_constraint(self, target: Any, scale: float = 1.0) -> None:
@@ -482,9 +558,29 @@ class FSplineProblem:
                 tangent[1] * _cos(constraint.angle)
                 - tangent[0] * _sin(constraint.angle)
             ).reshape((1,))
+        elif isinstance(constraint, TangentDirectionConstraint):
+            tangent = curve.evaluate(constraint.parameter, derivative_order=1).reshape(
+                (self.physical_dimension,)
+            )
+            direction = constraint.direction
+            pivot = constraint.pivot_index
+            residual = csdl.concatenate(
+                tuple(
+                    (
+                        tangent[index] * direction[pivot]
+                        - tangent[pivot] * direction[index]
+                    ).reshape((1,))
+                    for index in range(self.physical_dimension)
+                    if index != pivot
+                )
+            )
         elif isinstance(constraint, CurvatureConstraint):
             residual = (
                 curve.curvature(constraint.parameter) - constraint.target
+            ).reshape((1,))
+        elif isinstance(constraint, CurvatureMagnitudeConstraint):
+            residual = (
+                curve.curvature_magnitude(constraint.parameter) - constraint.target
             ).reshape((1,))
         elif isinstance(constraint, AreaConstraint):
             residual = (curve.signed_area() - constraint.target).reshape((1,))
@@ -527,18 +623,22 @@ class FSplineProblem:
             None, :
         ]
 
-        if self.physical_dimension == 2:
-            chord_length = np.linalg.norm(end - start)
-            tangent_distance = chord_length / max(self.num_control_points - 1, 1)
-            for constraint in self.constraints:
-                if not isinstance(constraint, TangentAngleConstraint):
-                    continue
+        chord_length = np.linalg.norm(end - start)
+        tangent_distance = chord_length / max(self.num_control_points - 1, 1)
+        for constraint in self.constraints:
+            direction = None
+            if isinstance(constraint, TangentAngleConstraint):
                 angle = float(_value_array(constraint.angle).reshape(-1)[0])
                 direction = np.array([np.cos(angle), np.sin(angle)])
-                if np.isclose(constraint.parameter, 0.0):
-                    initial[1] = start + tangent_distance * direction
-                elif np.isclose(constraint.parameter, 1.0):
-                    initial[-2] = end - tangent_distance * direction
+            elif isinstance(constraint, TangentDirectionConstraint):
+                direction = _value_array(constraint.direction).reshape(-1)
+                direction = direction / np.linalg.norm(direction)
+            if direction is None:
+                continue
+            if np.isclose(constraint.parameter, 0.0):
+                initial[1] = start + tangent_distance * direction
+            elif np.isclose(constraint.parameter, 1.0):
+                initial[-2] = end - tangent_distance * direction
         return initial
 
     @staticmethod
