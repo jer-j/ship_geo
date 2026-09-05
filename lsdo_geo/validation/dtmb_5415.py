@@ -133,6 +133,10 @@ class DTMB5415SectionFitData:
     points: np.ndarray
     longitudinal_coordinates: np.ndarray
     station_regions: tuple[DTMB5415Region, ...]
+    # Set only for a full section running keel to deck edge: where the
+    # waterline falls in the section's own normalized arc length, so that a
+    # single curve spanning both can constrain its immersed part.
+    waterline_parameters: np.ndarray | None = None
 
 
 @dataclass
@@ -738,6 +742,10 @@ def extract_dtmb_5415_section_fit_data(
     num_curve_points: int = 17,
     search_resolution: int = 121,
     transverse_resolution: int = 301,
+    full_section: bool = False,
+    blend_depths: npt.ArrayLike | None = None,
+    blend_parameter: float = 0.30,
+    waterline_parameter: float = 0.65,
 ) -> DTMB5415SectionFitData:
     """Extract component-resolved auxiliary body-plan targets.
 
@@ -782,23 +790,55 @@ def extract_dtmb_5415_section_fit_data(
     curve_parameters = np.linspace(0.0, 1.0, num_curve_points)
     coordinates = forward_perpendicular + length * stations
     targets = np.zeros((stations.size, num_curve_points, 2))
+    waterline_parameters = np.zeros(stations.size)
     regions: list[DTMB5415Region] = []
     for index, x_coordinate in enumerate(coordinates):
         region = region_at(float(x_coordinate))
         regions.append(region)
-        section = _underwater_section_curve(
-            _constant_x_section(
-                reference.patches[region],
-                functions[region],
-                float(x_coordinate),
-                search_resolution,
-                transverse_resolution,
-            )
+        raw = _constant_x_section(
+            reference.patches[region],
+            functions[region],
+            float(x_coordinate),
+            search_resolution,
+            transverse_resolution,
         )
+        submerged = _underwater_section_curve(raw)
+        if full_section:
+            # Keel to deck edge, with the interpolated waterline kept as a
+            # sample so its arc-length position is exact.
+            ordered = raw[np.argsort(raw[:, 2])]
+            above = ordered[ordered[:, 2] > 0.0]
+            section = np.vstack((submerged, above))
+        else:
+            section = submerged
         points = section[:, [2, 1]]
         lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
         cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
         cumulative /= cumulative[-1]
+        if full_section:
+            # A loft needs one basis for every section, so the parameter has
+            # to mean the same thing at each station. Stretch each section's
+            # own arc length piecewise so the blend line and the waterline
+            # always land on the same parameter; the section keeps its shape,
+            # only the parameterization is made comparable.
+            waterline_arc = float(cumulative[submerged.shape[0] - 1])
+            knots_from, knots_to = [0.0, waterline_arc, 1.0], [
+                0.0, waterline_parameter, 1.0
+            ]
+            if blend_depths is not None:
+                blend_z = -abs(
+                    float(np.asarray(blend_depths, dtype=float).reshape(-1)[index])
+                )
+                blend_arc = float(
+                    np.interp(blend_z, points[:, 0], cumulative)
+                )
+                if 1.0e-6 < blend_arc < waterline_arc - 1.0e-6:
+                    knots_from = [0.0, blend_arc, waterline_arc, 1.0]
+                    knots_to = [
+                        0.0, blend_parameter, waterline_parameter, 1.0
+                    ]
+            cumulative = np.interp(cumulative, knots_from, knots_to)
+            waterline_parameters[index] = waterline_parameter
         targets[index, :, 0] = np.interp(curve_parameters, cumulative, points[:, 0])
         targets[index, :, 1] = np.interp(curve_parameters, cumulative, points[:, 1])
     return DTMB5415SectionFitData(
@@ -807,6 +847,7 @@ def extract_dtmb_5415_section_fit_data(
         points=targets,
         longitudinal_coordinates=coordinates,
         station_regions=tuple(regions),
+        waterline_parameters=waterline_parameters if full_section else None,
     )
 
 

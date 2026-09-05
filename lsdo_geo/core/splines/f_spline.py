@@ -129,8 +129,20 @@ class FSplineCurve:
             parametric_derivative_orders=(derivative_order,),
         )
 
-    def quadrature(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return composite Gauss-Legendre data over nonzero knot spans."""
+    def quadrature(
+        self, parameter_range: tuple[float, float] = (0.0, 1.0)
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return composite Gauss-Legendre data over nonzero knot spans.
+
+        ``parameter_range`` restricts the rule to a sub-arc. The span
+        boundaries are kept as breakpoints so the rule stays exact across
+        knots, and the ends of the range are added as breakpoints of their
+        own. This is what lets one curve spanning keel to deck edge report
+        the area of its immersed part alone.
+        """
+        start, stop = (float(parameter_range[0]), float(parameter_range[1]))
+        if not 0.0 <= start < stop <= 1.0:
+            raise ValueError("parameter_range must satisfy 0 <= start < stop <= 1.")
         local_points, local_weights = np.polynomial.legendre.leggauss(
             self.quadrature_order
         )
@@ -138,9 +150,14 @@ class FSplineCurve:
         knots = np.asarray(self.space.knots[knot_indices], dtype=float)
         degree = int(self.space.degree[0])
         active_knots = np.unique(knots[degree:-degree])
+        breakpoints = np.unique(
+            np.concatenate((active_knots[
+                (active_knots > start) & (active_knots < stop)
+            ], [start, stop]))
+        )
         points: list[np.ndarray] = []
         weights: list[np.ndarray] = []
-        for lower, upper in pairwise(active_knots):
+        for lower, upper in pairwise(breakpoints):
             if upper <= lower:
                 continue
             half_span = 0.5 * (upper - lower)
@@ -175,21 +192,23 @@ class FSplineCurve:
 
     def area_moments(
         self,
+        parameter_range: tuple[float, float] = (0.0, 1.0),
     ) -> tuple[csdl.Variable, csdl.Variable, csdl.Variable]:
         """Return signed area and its first moments for a planar curve.
 
-        The curve is closed to the first coordinate axis by vertical segments.
-        The result is ``(area, first_moment_about_y,
-        first_moment_about_x)``.
+        The arc is closed to the first coordinate axis by vertical segments at
+        the ends of ``parameter_range``, so a sub-arc reports the area of the
+        region it bounds with the axis. The result is ``(area,
+        first_moment_about_y, first_moment_about_x)``.
         """
         if self.physical_dimension != 2:
             raise ValueError("area and centroid require a planar curve.")
 
-        points, weights = self.quadrature()
+        points, weights = self.quadrature(parameter_range)
         coordinates = self.evaluate(points)
         derivatives = self.evaluate(points, derivative_order=1)
-        start = self.evaluate(0.0).reshape((2,))
-        end = self.evaluate(1.0).reshape((2,))
+        start = self.evaluate(float(parameter_range[0])).reshape((2,))
+        end = self.evaluate(float(parameter_range[1])).reshape((2,))
 
         line_integrand = (
             coordinates[:, 1] * derivatives[:, 0]
@@ -210,13 +229,17 @@ class FSplineCurve:
         ) / 6.0
         return area, moment_y, moment_x
 
-    def signed_area(self) -> csdl.Variable:
+    def signed_area(
+        self, parameter_range: tuple[float, float] = (0.0, 1.0)
+    ) -> csdl.Variable:
         """Return signed area between the curve and the first axis."""
-        return self.area_moments()[0]
+        return self.area_moments(parameter_range)[0]
 
-    def centroid(self) -> csdl.Variable:
+    def centroid(
+        self, parameter_range: tuple[float, float] = (0.0, 1.0)
+    ) -> csdl.Variable:
         """Return the centroid of signed area under a planar curve."""
-        area, moment_y, moment_x = self.area_moments()
+        area, moment_y, moment_x = self.area_moments(parameter_range)
         return csdl.concatenate(
             (
                 (moment_y / area).reshape((1,)),
@@ -385,10 +408,20 @@ class FSplineProblem:
             CurvatureConstraint(parameter, _coerce_target(target), scale)
         )
 
-    def add_area_constraint(self, target: Any, scale: float = 1.0) -> None:
-        """Add a signed planar-area constraint."""
+    def add_area_constraint(
+        self,
+        target: Any,
+        scale: float = 1.0,
+        parameter_range: tuple[float, float] = (0.0, 1.0),
+    ) -> None:
+        """Add a signed planar-area constraint, optionally over a sub-arc."""
         self._require_planar("area")
-        self.constraints.append(AreaConstraint(_coerce_target(target), scale))
+        start, stop = float(parameter_range[0]), float(parameter_range[1])
+        if not 0.0 <= start < stop <= 1.0:
+            raise ValueError("parameter_range must satisfy 0 <= start < stop <= 1.")
+        self.constraints.append(
+            AreaConstraint(_coerce_target(target), scale, (start, stop))
+        )
 
     def add_centroid_constraint(self, target: Any, scale: float = 1.0) -> None:
         """Add a planar area-centroid constraint."""
@@ -505,7 +538,9 @@ class FSplineProblem:
                 curve.curvature(constraint.parameter) - constraint.target
             ).reshape((1,))
         elif isinstance(constraint, AreaConstraint):
-            residual = (curve.signed_area() - constraint.target).reshape((1,))
+            residual = (
+                curve.signed_area(constraint.parameter_range) - constraint.target
+            ).reshape((1,))
         elif isinstance(constraint, CentroidConstraint):
             residual = curve.centroid() - constraint.target
         else:

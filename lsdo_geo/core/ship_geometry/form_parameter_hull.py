@@ -403,6 +403,8 @@ class FormParameterHullProblem:
         transom_x_offsets: Any | None = None,
         transom_deck_x_offsets: Any | None = None,
         dome_transom_x_offsets: Any | None = None,
+        unify_bands: bool = False,
+        section_waterline_parameters: npt.ArrayLike | None = None,
         bulge_depth_threshold: float = 0.15,
         dome_depth_threshold: float = 0.05,
         name: str = "form_parameter_hull",
@@ -465,6 +467,13 @@ class FormParameterHullProblem:
         self.transom_x_offsets = transom_x_offsets
         self.transom_deck_x_offsets = transom_deck_x_offsets
         self.dome_transom_x_offsets = dome_transom_x_offsets
+        # One curve per section, keel to deck edge.
+        self.unify_bands = bool(unify_bands)
+        self.section_waterline_parameters = (
+            None
+            if section_waterline_parameters is None
+            else np.asarray(section_waterline_parameters, dtype=float).reshape(-1)
+        )
         self.bulge_depth_threshold = float(bulge_depth_threshold)
         self.dome_depth_threshold = float(dome_depth_threshold)
         self.name = name
@@ -852,11 +861,17 @@ class FormParameterHullProblem:
                 .reshape((num_stations,))
             )
             band = np.asarray(dome_mask, dtype=float)
-            dome_areas_for_sections = dome_areas_for_sections * band
             keel_half_breadths_for_sections = keel_half_breadths_for_sections * band
-            half_areas_for_sections = (
-                half_areas_for_sections - dome_areas_for_sections
-            )
+            if self.unify_bands:
+                # One curve carries the whole immersed section, so its area
+                # constraint takes the sectional-area curve directly and there
+                # is nothing to partition.
+                dome_areas_for_sections = None
+            else:
+                dome_areas_for_sections = dome_areas_for_sections * band
+                half_areas_for_sections = (
+                    half_areas_for_sections - dome_areas_for_sections
+                )
         # The section-fit objective compares the main band against the
         # reference section. Where a dome band is carried the main band spans
         # only blend line to waterline, so fitting it against points that run
@@ -869,6 +884,8 @@ class FormParameterHullProblem:
         dome_points: np.ndarray | None = None
         dome_fit_available: list[bool] = []
         if (
+            not self.unify_bands
+        ) and (
             self.model_dome_band
             and dome_mask is not None
             and section_fit_points is not None
@@ -937,6 +954,45 @@ class FormParameterHullProblem:
             dome_points if dome_points is not None and any(dome_fit_available) else None
         )
 
+        # The blend line's position along each section, in the same normalized
+        # arc length the waterline parameter uses, found from the reference
+        # section rather than from the solve.
+        blend_parameters = None
+        if self.unify_bands and self.model_dome_band and self.section_fit_points is not None:
+            reference_points = np.asarray(
+                self.section_fit_points.value
+                if isinstance(self.section_fit_points, csdl.Variable)
+                else self.section_fit_points,
+                dtype=float,
+            )
+            observed_blend = _current_array(self.targets.blend_depths)
+            station_values = np.asarray(fit_stations, dtype=float)
+            parameters = np.asarray(
+                self.section_fit_parameters, dtype=float
+            ).reshape(-1)
+            blend_parameters = []
+            for index, station in enumerate(section_stations):
+                blend_z = -float(
+                    np.interp(float(station), station_values, observed_blend)
+                )
+                column = reference_points[index][:, 0]
+                # The section runs keel upward, so z increases with parameter.
+                position = float(np.interp(blend_z, column, parameters))
+                waterline = (
+                    0.75
+                    if self.section_waterline_parameters is None
+                    else float(self.section_waterline_parameters[index])
+                )
+                blend_parameters.append(
+                    float(np.clip(position, 0.02, waterline - 0.02))
+                )
+            # One loft, one basis: every section carries the blend at the same
+            # parameter, so the per-station positions are collapsed to their
+            # median rather than used individually.
+            blend_parameters = [float(np.median(blend_parameters))] * len(
+                blend_parameters
+            )
+
         section_problem = SectionLoftProblem(
             length=length,
             station_parameters=section_stations,
@@ -964,6 +1020,9 @@ class FormParameterHullProblem:
             dome_half_areas=dome_areas_for_sections,
             dome_fit_points=dome_fit_points,
             dome_mask=dome_mask,
+            unify_bands=self.unify_bands,
+            waterline_parameters=self.section_waterline_parameters,
+            blend_parameters=blend_parameters,
             num_dome_control_points=self.num_dome_control_points,
             section_interior_points=section_interior_points,
             section_geometry_hints=section_geometry_hints,

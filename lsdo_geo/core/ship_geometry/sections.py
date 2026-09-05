@@ -161,6 +161,9 @@ class SectionProblem:
         dome_depth: Any | None = None,
         dome_half_area: Any | None = None,
         dome_fit_points: Any | None = None,
+        unify_bands: bool = False,
+        waterline_parameter: float = 0.75,
+        blend_parameter: float | None = None,
         dome_bottom_tangent_angle: Any | None = None,
         num_dome_control_points: int | None = None,
         template: SectionTemplate = SectionTemplate.ROUND_BILGE,
@@ -220,11 +223,55 @@ class SectionProblem:
             if tuple(shape) != (parameters.size, 2):
                 raise ValueError("fit_points must have shape (num_fit_parameters, 2).")
             self.fit_parameters = parameters
+        # One curve from keel to deck edge, with the waterline and the blend
+        # line as interior conditions rather than places where one curve stops
+        # and another starts. The quick work and the dead work stop being
+        # separate surfaces, and continuity across both is whatever the single
+        # curve has -- curvature continuous inside a span, not merely tangent.
+        self.unify_bands = bool(unify_bands)
+        self.waterline_parameter = float(waterline_parameter)
+        self.blend_parameter = (
+            None if blend_parameter is None else float(blend_parameter)
+        )
+        if self.unify_bands:
+            if not 0.0 < self.waterline_parameter < 1.0:
+                raise ValueError("waterline_parameter must lie strictly inside (0, 1).")
+            if self.blend_parameter is not None and not (
+                0.0 < self.blend_parameter < self.waterline_parameter
+            ):
+                raise ValueError(
+                    "blend_parameter must lie strictly between the keel and the "
+                    "waterline."
+                )
+
         knots = None
         if self.template is SectionTemplate.HARD_CHINE:
             if chine_point is None:
                 raise ValueError("hard-chine sections require chine_point=(z, y).")
             knots = _repeated_chine_knots(num_control_points, degree, chine_parameter)
+        elif self.unify_bands:
+            # Coefficients are spread over the three stretches the section now
+            # spans in one curve -- keel to blend, blend to waterline,
+            # waterline to deck -- in proportion to how much parameter each
+            # covers, so each has resolution near its own conditions.
+            from lsdo_geo.core.ship_geometry.form_curves import piecewise_open_knots
+
+            if self.blend_parameter is not None:
+                breaks = (self.blend_parameter, self.waterline_parameter)
+                weights = (
+                    self.blend_parameter,
+                    self.waterline_parameter - self.blend_parameter,
+                    1.0 - self.waterline_parameter,
+                )
+            else:
+                breaks = (self.waterline_parameter,)
+                weights = (
+                    self.waterline_parameter,
+                    1.0 - self.waterline_parameter,
+                )
+            knots = piecewise_open_knots(
+                num_control_points, degree, breakpoints=breaks, weights=weights
+            )
         self.problem = FSplineProblem(
             num_control_points=num_control_points,
             degree=degree,
@@ -234,13 +281,50 @@ class SectionProblem:
             quadrature_order=quadrature_order,
             name=self.name,
         )
-        # The lower endpoint is the band's own lower boundary. Where a sonar
-        # dome is carried below, that boundary is the blend line rather than
-        # the centreplane keel, so it has a half-breadth of its own.
-        self.problem.add_point_constraint(0.0, _vector2(-draft, keel_half_breadth))
-        self.problem.add_point_constraint(1.0, _vector2(0.0, half_breadth))
-        self.problem.add_tangent_angle_constraint(0.0, keel_tangent_angle)
-        self.problem.add_tangent_angle_constraint(1.0, waterline_tangent_angle)
+        if self.unify_bands:
+            # Keel at t = 0, deck edge at t = 1, and the two lines that used to
+            # be surface boundaries carried as interior conditions.
+            #
+            # Where a lower band is modelled, ``draft`` is already the blend
+            # line and ``dome_depth`` is the section's true deepest point, so
+            # the keel condition uses the latter. The curve leaves the
+            # centreplane horizontally, which is what a rounded bottom does.
+            keel_depth = draft if dome_depth is None else dome_depth
+            self.problem.add_point_constraint(0.0, _vector2(-keel_depth, 0.0))
+            self.problem.add_tangent_angle_constraint(0.0, 0.5 * np.pi)
+            if self.blend_parameter is not None and dome_depth is not None:
+                self.problem.add_point_constraint(
+                    self.blend_parameter,
+                    _vector2(-draft, keel_half_breadth),
+                )
+                self.problem.add_tangent_angle_constraint(
+                    self.blend_parameter, keel_tangent_angle
+                )
+            self.problem.add_point_constraint(
+                self.waterline_parameter, _vector2(0.0, half_breadth)
+            )
+            self.problem.add_tangent_angle_constraint(
+                self.waterline_parameter, waterline_tangent_angle
+            )
+            if deck_height is not None:
+                self.problem.add_point_constraint(
+                    1.0, _vector2(deck_height, deck_half_breadth)
+                )
+                if deck_tangent_angle is not None:
+                    self.problem.add_tangent_angle_constraint(
+                        1.0, deck_tangent_angle
+                    )
+        else:
+            # The lower endpoint is the band's own lower boundary. Where a
+            # sonar dome is carried below, that boundary is the blend line
+            # rather than the centreplane keel, so it has a half-breadth of
+            # its own.
+            self.problem.add_point_constraint(
+                0.0, _vector2(-draft, keel_half_breadth)
+            )
+            self.problem.add_point_constraint(1.0, _vector2(0.0, half_breadth))
+            self.problem.add_tangent_angle_constraint(0.0, keel_tangent_angle)
+            self.problem.add_tangent_angle_constraint(1.0, waterline_tangent_angle)
         if self.template is SectionTemplate.HARD_CHINE:
             if isinstance(chine_point, csdl.Variable):
                 target = chine_point
@@ -255,7 +339,14 @@ class SectionProblem:
                         "interior waypoint parameters must lie strictly inside (0, 1)."
                     )
                 self.problem.add_point_constraint(value, point)
-        self.problem.add_area_constraint(half_area)
+        if self.unify_bands:
+            # Displacement comes from the immersed part alone, which is the
+            # arc below the waterline rather than the whole curve.
+            self.problem.add_area_constraint(
+                half_area, parameter_range=(0.0, self.waterline_parameter)
+            )
+        else:
+            self.problem.add_area_constraint(half_area)
 
         deck_given = (
             deck_height is not None
@@ -274,7 +365,7 @@ class SectionProblem:
         # tangent expressions the main band starts from, so position and
         # tangent agree by construction rather than by a fitted compromise.
         self.dome_problem: FSplineProblem | None = None
-        if dome_depth is not None:
+        if dome_depth is not None and not self.unify_bands:
             self.dome_problem = FSplineProblem(
                 num_control_points=num_dome_control_points or num_control_points,
                 degree=degree,
@@ -299,7 +390,7 @@ class SectionProblem:
 
         self.initial_geometry_hint = initial_geometry_hint or {}
         self.deck_problem: FSplineProblem | None = None
-        if deck_given:
+        if deck_given and not self.unify_bands:
             self.deck_problem = FSplineProblem(
                 num_control_points=num_deck_control_points or num_control_points,
                 degree=deck_degree or degree,
@@ -337,10 +428,20 @@ class SectionProblem:
             ]
         hint = self.initial_geometry_hint
         if initial_control_points is None and {"draft", "half_breadth"} <= hint.keys():
+            # A unified section runs to the deck edge, so its starting polygon
+            # has to as well; ending it at the waterline would start every
+            # control point above the waterline in the wrong place.
+            if self.unify_bands and {"deck_height", "deck_half_breadth"} <= hint.keys():
+                upper = (
+                    float(hint["deck_height"]),
+                    float(hint["deck_half_breadth"]),
+                )
+            else:
+                upper = (0.0, float(hint["half_breadth"]))
             initial_control_points = _linear_polygon(
                 self.problem,
                 (-float(hint["draft"]), 0.0),
-                (0.0, float(hint["half_breadth"])),
+                upper,
             )
         topside_initial = None
         if self.deck_problem is not None and {

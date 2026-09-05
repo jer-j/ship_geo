@@ -45,10 +45,16 @@ class CurvatureConstraint:
 
 @dataclass(frozen=True)
 class AreaConstraint:
-    """Constrain signed area between a planar curve and the first axis."""
+    """Constrain signed area between a planar curve and the first axis.
+
+    ``parameter_range`` restricts the constraint to a sub-arc, which is how a
+    section spanning keel to deck edge constrains the area of its immersed
+    part alone.
+    """
 
     target: Any
     scale: float = 1.0
+    parameter_range: tuple[float, float] = (0.0, 1.0)
 
 
 @dataclass(frozen=True)

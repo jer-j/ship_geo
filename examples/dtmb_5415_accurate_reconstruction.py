@@ -58,6 +58,12 @@ from lsdo_geo.validation import (
     load_dtmb_5415,
 )
 
+# Where the blend line and the waterline sit on every unified section. One
+# loft needs one basis, so these are the same at every station and each
+# section's own arc length is stretched to match.
+BLEND_PARAMETER = 0.30
+WATERLINE_PARAMETER = 0.65
+
 DEFAULT_VALIDATION_STATIONS = (
     0.03, 0.06, 0.10, 0.15, 0.23, 0.35, 0.50, 0.67, 0.83, 0.95,
 )
@@ -196,6 +202,17 @@ def main() -> None:
             "does not fit in 15 GB during the XLA compile."
         ),
     )
+    parser.add_argument(
+        "--unify-bands",
+        action="store_true",
+        help=(
+            "Build one curve per section from keel to deck edge, so the quick "
+            "work and the dead work are one surface and one patch. The "
+            "waterline and the blend line become interior conditions on that "
+            "curve instead of places where one surface stops and another "
+            "starts."
+        ),
+    )
     parser.add_argument("--max-iter", type=int, default=12)
     parser.add_argument("--print-status", action="store_true")
     parser.add_argument(
@@ -233,11 +250,37 @@ def main() -> None:
         f"{int(np.sum(observation_stations <= regions[1].end))} inside the dome "
         f"and transition (v <= {regions[1].end:.4f})"
     )
-    section_data = extract_dtmb_5415_section_fit_data(reference, section_stations)
+    # The blend line each section is reparameterized around, taken from the
+    # observations at the generating stations.
+    blend_at_sections = np.interp(
+        section_stations,
+        observation_stations,
+        np.asarray(form_data.fit_targets.blend_depths, dtype=float).reshape(-1),
+    )
+    section_data = extract_dtmb_5415_section_fit_data(
+        reference,
+        section_stations,
+        full_section=arguments.unify_bands,
+        blend_depths=blend_at_sections if arguments.unify_bands else None,
+        blend_parameter=BLEND_PARAMETER,
+        waterline_parameter=WATERLINE_PARAMETER,
+    )
     holdout_data = extract_dtmb_5415_section_fit_data(
         reference,
         DEFAULT_VALIDATION_STATIONS,
         num_curve_points=section_data.curve_parameters.size,
+        full_section=arguments.unify_bands,
+        blend_depths=(
+            np.interp(
+                np.asarray(DEFAULT_VALIDATION_STATIONS, dtype=float),
+                observation_stations,
+                np.asarray(form_data.fit_targets.blend_depths, dtype=float).reshape(-1),
+            )
+            if arguments.unify_bands
+            else None
+        ),
+        blend_parameter=BLEND_PARAMETER,
+        waterline_parameter=WATERLINE_PARAMETER,
     )
     transom_offsets, transom_deck_offsets, transom_info = (
         extract_dtmb_5415_transom_offsets(
@@ -261,21 +304,52 @@ def main() -> None:
         / np.asarray(form_data.fit_targets.dome_depths, dtype=float).reshape(-1)[-1]
     )
     girth = np.linspace(0.0, 1.0, np.asarray(transom_offsets).size)
-    dome_transom_offsets = np.interp(
-        np.linspace(0.0, blend_fraction, arguments.num_dome_control_points),
-        girth,
-        np.asarray(transom_offsets, dtype=float),
-    )
-    transom_offsets = np.interp(
-        np.linspace(blend_fraction, 1.0, arguments.num_section_control_points),
-        girth,
-        np.asarray(transom_offsets, dtype=float),
-    )
-    print(
-        f"  rake split at the blend, {blend_fraction:.3f} of depth: "
-        f"lower band {1e3 * dome_transom_offsets.ptp():.1f} mm, "
-        f"upper band {1e3 * transom_offsets.ptp():.1f} mm"
-    )
+    if arguments.unify_bands:
+        # One curve spans the whole girth, so the rake profile is resampled
+        # onto its control points rather than split between bands. The
+        # underwater profile is carried up to the waterline and the freeboard
+        # profile above it.
+        waterline_share = WATERLINE_PARAMETER
+        deck_girth = np.linspace(0.0, 1.0, np.asarray(transom_deck_offsets).size)
+        lower = np.interp(
+            np.linspace(0.0, 1.0, arguments.num_section_control_points),
+            girth,
+            np.asarray(transom_offsets, dtype=float),
+        )
+        upper = np.interp(
+            np.linspace(0.0, 1.0, arguments.num_section_control_points),
+            deck_girth,
+            np.asarray(transom_deck_offsets, dtype=float),
+        )
+        blend_in = np.clip(
+            (np.linspace(0.0, 1.0, arguments.num_section_control_points)
+             - waterline_share) / 0.15,
+            0.0,
+            1.0,
+        )
+        transom_offsets = (1.0 - blend_in) * lower + blend_in * upper
+        dome_transom_offsets = None
+        transom_deck_offsets = None
+        print(
+            f"  rake carried on one curve, waterline at {waterline_share:.3f} "
+            f"of arc: {1e3 * transom_offsets.ptp():.1f} mm"
+        )
+    else:
+        dome_transom_offsets = np.interp(
+            np.linspace(0.0, blend_fraction, arguments.num_dome_control_points),
+            girth,
+            np.asarray(transom_offsets, dtype=float),
+        )
+        transom_offsets = np.interp(
+            np.linspace(blend_fraction, 1.0, arguments.num_section_control_points),
+            girth,
+            np.asarray(transom_offsets, dtype=float),
+        )
+        print(
+            f"  rake split at the blend, {blend_fraction:.3f} of depth: "
+            f"lower band {1e3 * dome_transom_offsets.ptp():.1f} mm, "
+            f"upper band {1e3 * transom_offsets.ptp():.1f} mm"
+        )
     extraction_recorder.stop()
     print(f"extracted {section_stations.size} generating stations "
           f"and {len(DEFAULT_VALIDATION_STATIONS)} holdout stations")
@@ -366,6 +440,8 @@ def main() -> None:
         transom_x_offsets=transom_offsets,
         transom_deck_x_offsets=transom_deck_offsets,
         dome_transom_x_offsets=dome_transom_offsets,
+        unify_bands=arguments.unify_bands,
+        section_waterline_parameters=section_data.waterline_parameters,
         x_origin=form_data.coordinate_origin,
         longitudinal_regions=regions,
         name="dtmb_5415_accurate",
@@ -396,11 +472,13 @@ def main() -> None:
     if regional is not None:
         for name, patch in regional.patches.items():
             outputs[f"patch_{name}"] = patch.mesh(resolution(61, 81))
-    for label, data in (("fit", section_data), ("holdout", holdout_data)):
-        for index, station in enumerate(data.station_parameters):
-            outputs[f"{label}_section_{index}"] = regional.evaluate_section(
-                float(station), data.curve_parameters
-            )
+    # With one patch there is no regional subdivision to evaluate through.
+    if regional is not None:
+        for label, data in (("fit", section_data), ("holdout", holdout_data)):
+            for index, station in enumerate(data.station_parameters):
+                outputs[f"{label}_section_{index}"] = regional.evaluate_section(
+                    float(station), data.curve_parameters
+                )
     # Control nets are tiny next to sampled meshes, and the knot vectors are
     # constants, so caching the coefficients lets any later figure be rebuilt
     # at arbitrary resolution without paying for another compile.

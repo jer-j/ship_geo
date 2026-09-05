@@ -167,6 +167,9 @@ class SectionLoftProblem:
         dome_depths: Sequence[Any] | csdl.Variable | None = None,
         dome_half_areas: Sequence[Any] | csdl.Variable | None = None,
         dome_fit_points: Any | None = None,
+        unify_bands: bool = False,
+        waterline_parameters: Sequence[float] | None = None,
+        blend_parameters: Sequence[float] | None = None,
         dome_mask: Sequence[bool] | None = None,
         num_dome_control_points: int | None = None,
         num_section_control_points: int = 8,
@@ -280,6 +283,12 @@ class SectionLoftProblem:
         self.dome_depths = dome_depths
         self.dome_half_areas = dome_half_areas
         self.dome_fit_points = dome_fit_points
+        # One curve per station from keel to deck edge, so the quick work and
+        # the dead work are one surface rather than two lofts meeting at the
+        # waterline.
+        self.unify_bands = bool(unify_bands)
+        self.waterline_parameters = waterline_parameters
+        self.blend_parameters = blend_parameters
         self.num_dome_control_points = num_dome_control_points
         if dome_mask is None:
             self.dome_mask = None
@@ -393,7 +402,9 @@ class SectionLoftProblem:
                 ),
                 dome_half_area=(
                     _sequence_item(self.dome_half_areas, index)
-                    if model_dome and bool(self.dome_mask[index])
+                    if model_dome
+                    and self.dome_half_areas is not None
+                    and bool(self.dome_mask[index])
                     else None
                 ),
                 dome_fit_points=(
@@ -401,6 +412,17 @@ class SectionLoftProblem:
                     if self.dome_fit_points is None
                     or not (model_dome and bool(self.dome_mask[index]))
                     else self.dome_fit_points[index]
+                ),
+                unify_bands=self.unify_bands,
+                waterline_parameter=(
+                    0.75
+                    if self.waterline_parameters is None
+                    else float(self.waterline_parameters[index])
+                ),
+                blend_parameter=(
+                    None
+                    if self.blend_parameters is None
+                    else float(self.blend_parameters[index])
                 ),
                 num_dome_control_points=self.num_dome_control_points,
                 waterline_tangent_angle=_sequence_item(
@@ -504,8 +526,9 @@ class SectionLoftProblem:
             )
             surface = surface_assembly.surface
 
+        # One patch means no regional subdivision either.
         regional_surface = None
-        if self.longitudinal_regions is not None:
+        if self.longitudinal_regions is not None and not self.unify_bands:
             regional_surface = RegionalCompatibleLoft.create(
                 sections=loft_sections,
                 station_parameters=loft_parameters,
@@ -516,6 +539,10 @@ class SectionLoftProblem:
             )
 
         freeboard_surface: TensorProductSurface | None = None
+        if self.unify_bands:
+            # The deck edge is the top of the single surface.
+            model_deck = False
+            model_dome = False
         if model_deck:
             freeboard_sections: list[FSplineCurve] = [
                 assembly.topside_curve for assembly in assemblies
