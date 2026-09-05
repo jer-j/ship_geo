@@ -694,15 +694,20 @@ class FormParameterHullProblem:
             observed_depths = _current_array(self.targets.dome_depths)
             observed_blend = _current_array(self.targets.blend_depths)
             station_values = np.asarray(fit_stations, dtype=float)
-            threshold = self.dome_depth_threshold * _scalar_value(draft)
-            dome_mask = [
-                (
-                    float(np.interp(float(station), station_values, observed_depths))
-                    - float(np.interp(float(station), station_values, observed_blend))
+            # Scaled by the section's own depth, not the ship's draft. The
+            # blend line now runs the whole length at a fixed fraction of the
+            # local depth, and a threshold tied to the global draft would drop
+            # the band at the transom, where the section is only 24 mm deep,
+            # breaking the one property that removes the patch seam: that both
+            # bands are lofted through the same stations.
+            dome_mask = []
+            for station in section_stations:
+                value = float(station)
+                depth = float(np.interp(value, station_values, observed_depths))
+                blend = float(np.interp(value, station_values, observed_blend))
+                dome_mask.append(
+                    (depth - blend) > self.dome_depth_threshold * max(depth, 1.0e-9)
                 )
-                > threshold
-                for station in section_stations
-            ]
 
         section_interior_points = None
         if self.model_bulge:

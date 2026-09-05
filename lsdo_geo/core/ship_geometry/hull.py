@@ -529,28 +529,54 @@ class SectionLoftProblem:
                 name=f"{self.name}_freeboard_surface",
             )
 
-        # The sonar-dome band is a partial-length patch: it exists only where
-        # the section actually necks, and it is lofted over that subset rather
-        # than being carried degenerately along the whole hull.
+        # The lower band. When every station carries one the band is lofted on
+        # exactly the main hull's stations, parameters and x coordinates, so
+        # the shared blend edge is the same B-spline on both surfaces rather
+        # than two curves that happen to agree at the generating sections.
+        # That is what removes the seam: the freeboard surface has never had
+        # one for the same reason. A partial-length band falls back to its own
+        # local parameterization and is only tied at the sections it shares.
         dome_surface: TensorProductSurface | None = None
         dome_stations: np.ndarray | None = None
         if model_dome and int(np.count_nonzero(self.dome_mask)):
-            indices = np.flatnonzero(self.dome_mask)
-            dome_stations = self.parameters[indices]
-            dome_curves = [assemblies[int(i)].dome_curve for i in indices]
-            dome_x = [
-                self.x_origin + self.length * (float(p) - 0.5) for p in dome_stations
-            ]
-            local = (dome_stations - dome_stations[0]) / (
-                dome_stations[-1] - dome_stations[0]
-            )
-            dome_surface = CompatibleLoft.create(
-                sections=dome_curves,
-                station_parameters=local,
-                x_coordinates=dome_x,
-                longitudinal_degree=min(self.longitudinal_degree, len(dome_curves) - 1),
-                name=f"{self.name}_dome_surface",
-            )
+            if bool(np.all(self.dome_mask)):
+                dome_stations = self.parameters.copy()
+                dome_curves = [assembly.dome_curve for assembly in assemblies]
+                if pointed_bow:
+                    dome_curves.insert(
+                        0, collapsed_section(dome_curves[0], f"{self.name}_dome_bow")
+                    )
+                if pointed_stern:
+                    dome_curves.append(
+                        collapsed_section(dome_curves[-1], f"{self.name}_dome_stern")
+                    )
+                dome_surface = CompatibleLoft.create(
+                    sections=dome_curves,
+                    station_parameters=loft_parameters,
+                    x_coordinates=x_coordinates,
+                    longitudinal_degree=self.longitudinal_degree,
+                    name=f"{self.name}_dome_surface",
+                )
+            else:
+                indices = np.flatnonzero(self.dome_mask)
+                dome_stations = self.parameters[indices]
+                dome_curves = [assemblies[int(i)].dome_curve for i in indices]
+                dome_x = [
+                    self.x_origin + self.length * (float(p) - 0.5)
+                    for p in dome_stations
+                ]
+                local = (dome_stations - dome_stations[0]) / (
+                    dome_stations[-1] - dome_stations[0]
+                )
+                dome_surface = CompatibleLoft.create(
+                    sections=dome_curves,
+                    station_parameters=local,
+                    x_coordinates=dome_x,
+                    longitudinal_degree=min(
+                        self.longitudinal_degree, len(dome_curves) - 1
+                    ),
+                    name=f"{self.name}_dome_surface",
+                )
 
         return SectionLoftAssembly(
             surface=surface,

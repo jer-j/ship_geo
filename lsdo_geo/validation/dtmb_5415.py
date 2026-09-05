@@ -378,28 +378,63 @@ def _bulge_section_properties(points: np.ndarray) -> tuple[float, float, float]:
     return float(y[widest]), float(z[widest]), parameter
 
 
-def _dome_band_properties(points: np.ndarray) -> tuple[float, ...]:
-    """Split an underwater section into a hull band and a sonar-dome band.
+def _blend_at_depth(
+    z: np.ndarray, y: np.ndarray, blend_depth: float
+) -> tuple[float, float, float]:
+    """Half-breadth, tangent, and enclosed area at a height on the section.
 
-    The blend line is the top of the dome: the local minimum in half-breadth
-    above the bulb, where the dome necks back toward the centreplane. Aft of
-    the dome the section is monotone and there is no such minimum, so the
-    blend line degenerates onto the keel and the dome band is absent.
+    Used where the section has no neck, so that the blend line remains a
+    well-defined curve on the hull rather than collapsing onto the keel.
+    """
+    target = -abs(blend_depth)
+    index = int(np.searchsorted(z, target))
+    index = int(np.clip(index, 1, z.size - 1))
+    span = z[index] - z[index - 1]
+    weight = 0.0 if span <= 0.0 else (target - z[index - 1]) / span
+    half_breadth = float((1.0 - weight) * y[index - 1] + weight * y[index])
+    lower = max(index - 2, 0)
+    upper = min(index + 1, y.size - 1)
+    tangent = float(np.arctan2(y[upper] - y[lower], z[upper] - z[lower]))
+    below_z = np.concatenate((z[:index], [target]))
+    below_y = np.concatenate((y[:index], [half_breadth]))
+    area = float(abs(np.trapz(below_y, below_z))) if below_z.size > 1 else 0.0
+    return half_breadth, tangent, area
+
+
+def _dome_band_properties(
+    points: np.ndarray, fallback_fraction: float | None = None
+) -> tuple[float, ...]:
+    """Split an underwater section into an upper band and a lower band.
+
+    Where the sonar dome necks, the blend line is that neck: the local
+    minimum in half-breadth above the bulb. Aft of the dome the section is
+    monotone and there is no minimum, and the blend line is then placed at
+    ``fallback_fraction`` of the local depth so that it stays a continuous
+    curve running the whole length of the hull rather than collapsing onto
+    the keel. The fraction is chosen by the caller to match the neck where
+    the two definitions meet, so the handover introduces no step.
 
     Returns ``(blend_depth, blend_half_breadth, blend_tangent_angle,
-    dome_depth, dome_half_area, has_dome)``.
+    keel_depth, lower_band_half_area, has_neck)``.
     """
     underwater = _underwater_section_curve(points)
     z = underwater[:, 2]
     y = underwater[:, 1]
     keel_depth = float(-z[0])
+
+    def without_neck() -> tuple[float, ...]:
+        if fallback_fraction is None:
+            return (keel_depth, 0.0, 0.5 * np.pi, keel_depth, 0.0, 0.0)
+        blend_depth = float(fallback_fraction) * keel_depth
+        half_breadth, tangent, area = _blend_at_depth(z, y, blend_depth)
+        return (blend_depth, half_breadth, tangent, keel_depth, area, 0.0)
+
     widest = int(np.argmax(y))
-    no_dome = (keel_depth, 0.0, 0.5 * np.pi, keel_depth, 0.0, 0.0)
     if widest >= y.size - 3:
-        return no_dome
+        return without_neck()
     neck = widest + 1 + int(np.argmin(y[widest + 1 :]))
     if neck >= y.size - 2 or y[neck] >= y[widest] - 1.0e-4:
-        return no_dome
+        return without_neck()
     blend_depth = float(-z[neck])
     blend_half_breadth = float(y[neck])
     # Tangent of the section where the two bands meet, in the same
@@ -585,6 +620,7 @@ def extract_dtmb_5415_form_data(
 
     def properties(parameters: np.ndarray) -> np.ndarray:
         output = np.zeros((parameters.size, 17))
+        sections = []
         for index, parameter in enumerate(parameters):
             x_coordinate = forward_perpendicular + length * float(parameter)
             region = region_at(x_coordinate)
@@ -595,10 +631,31 @@ def extract_dtmb_5415_form_data(
                 search_resolution,
                 transverse_resolution,
             )
+            sections.append(points)
             output[index, :5] = _underwater_section_properties(points)
             output[index, 5:8] = _deck_section_properties(points)
             output[index, 8:11] = _bulge_section_properties(points)
             output[index, 11:] = _dome_band_properties(points)
+
+        # The blend line runs the whole length of the hull. Forward it is the
+        # neck above the sonar dome; aft of the dome no neck exists, and a
+        # second pass places it at a fixed fraction of the local depth so it
+        # stays a continuous curve instead of collapsing onto the keel. The
+        # fraction is the one the neck itself reaches at the last station that
+        # has one, so the two definitions agree where they meet and the
+        # handover introduces no step for a longitudinal curve to chase.
+        necked = np.flatnonzero(output[:, 16] > 0.5)
+        if necked.size:
+            last = int(necked[-1])
+            keel_depth = float(output[last, 14])
+            fraction = float(output[last, 11]) / keel_depth if keel_depth > 0.0 else 0.6
+            fraction = float(np.clip(fraction, 0.05, 0.95))
+            for index in range(parameters.size):
+                if output[index, 16] > 0.5:
+                    continue
+                output[index, 11:] = _dome_band_properties(
+                    sections[index], fallback_fraction=fraction
+                )
         return output
 
     integration_parameters = np.linspace(0.005, 1.0, integration_station_count)
@@ -621,7 +678,6 @@ def extract_dtmb_5415_form_data(
     maximum_draft_index = int(
         main_hull_indices[np.argmax(integrated[main_hull_indices, 1])]
     )
-    _close_dome_band_smoothly(np.asarray(requested, dtype=float), sampled)
     maximum_underwater_depth = float(np.max(integrated[:, 1]))
     requested_coordinates = forward_perpendicular + length * requested
     targets = LongitudinalFitTargets(
