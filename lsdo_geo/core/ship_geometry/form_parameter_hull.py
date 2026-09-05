@@ -317,7 +317,14 @@ class FormParameterHullGeometry:
         return {
             "length_between_perpendiculars": 0.0 * area_integral + length,
             "beam": 2.0 * self.waterline_curve.evaluate(self.maximum_beam_parameter),
-            "draft": self.draft_curve.evaluate(self.maximum_draft_parameter),
+            # The draft is the section's deepest point. Where a sonar-dome
+            # band runs the length of the hull, draft_curve is the blend line
+            # and the keel is the dome-depth curve.
+            "draft": (
+                self.dome_depth_curve
+                if self.dome_depth_curve is not None
+                else self.draft_curve
+            ).evaluate(self.maximum_draft_parameter),
             "displacement": 2.0 * length * area_integral,
             "lcb": length
             * (
@@ -499,11 +506,24 @@ class FormParameterHullProblem:
         problems[FormCurveKind.WATERLINE_HALF_BREADTH] = waterline_problem
 
         draft_problem = self._problem(FormCurveKind.KEEL_PROFILE)
-        draft_problem.add_value_constraint(self.targets.maximum_draft_parameter, draft)
-        draft_problem.add_derivative_constraint(
-            self.targets.maximum_draft_parameter, 0.0
-        )
-        draft_problem.add_value_constraint(1.0, self.targets.drafts[-1])
+        # These describe the keel: the section's deepest point reaches the
+        # ship's draft, flattens there, and ends at the transom's own depth.
+        # With a sonar-dome band carried the whole length, KEEL_PROFILE is the
+        # blend line rather than the keel -- it sits at a fraction of the
+        # local depth -- and the keel is DOME_DEPTH, so the constraints belong
+        # there instead. Pinning the blend line to the full draft asks for a
+        # section whose blend point is its own deepest point, which has no
+        # solution.
+        if self.model_dome_band:
+            draft_problem.add_value_constraint(1.0, self.targets.blend_depths[-1])
+        else:
+            draft_problem.add_value_constraint(
+                self.targets.maximum_draft_parameter, draft
+            )
+            draft_problem.add_derivative_constraint(
+                self.targets.maximum_draft_parameter, 0.0
+            )
+            draft_problem.add_value_constraint(1.0, self.targets.drafts[-1])
         problems[FormCurveKind.KEEL_PROFILE] = draft_problem
 
         for kind in (FormCurveKind.DEADRISE, FormCurveKind.FLARE):
@@ -555,9 +575,17 @@ class FormParameterHullProblem:
             problems[FormCurveKind.BLEND_HALF_BREADTH] = self._problem(
                 FormCurveKind.BLEND_HALF_BREADTH
             )
-            problems[FormCurveKind.DOME_DEPTH] = self._problem(
-                FormCurveKind.DOME_DEPTH
+            keel_problem = self._problem(FormCurveKind.DOME_DEPTH)
+            # DOME_DEPTH is the true keel profile over the whole length, so it
+            # carries the draft conditions the keel has to satisfy.
+            keel_problem.add_value_constraint(
+                self.targets.maximum_draft_parameter, draft
             )
+            keel_problem.add_derivative_constraint(
+                self.targets.maximum_draft_parameter, 0.0
+            )
+            keel_problem.add_value_constraint(1.0, self.targets.drafts[-1])
+            problems[FormCurveKind.DOME_DEPTH] = keel_problem
             problems[FormCurveKind.DOME_AREA] = self._problem(
                 FormCurveKind.DOME_AREA
             )
