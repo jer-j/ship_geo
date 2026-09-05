@@ -63,6 +63,30 @@ DEFAULT_VALIDATION_STATIONS = (
 )
 
 
+def _coarse_section_stations(regions) -> np.ndarray:
+    """A reduced station set for machines that cannot hold the full graph.
+
+    Carrying a lower band the whole length puts two sections at every
+    station, which took the full nineteen-station graph to 236k nodes and
+    past the memory of a 15 GB container. This keeps the same three-region
+    structure and the same features -- four stations through the dome, the
+    four the transition patch needs, and the pair bracketing the skeg -- with
+    fifteen stations instead of nineteen.
+    """
+    transition_start = regions[0].end
+    transition_end = regions[1].end
+    return np.asarray(
+        (
+            0.012, 0.032, 0.052, 0.090,
+            transition_start,
+            transition_start + (transition_end - transition_start) / 3.0,
+            transition_start + 2.0 * (transition_end - transition_start) / 3.0,
+            transition_end,
+            0.25, 0.45, 0.65, 0.79, 0.845, 0.92, 1.0,
+        )
+    )
+
+
 def _default_section_stations(regions) -> np.ndarray:
     """Cluster stations through the dome and transition, ending at the transom."""
     transition_start = regions[0].end
@@ -163,6 +187,15 @@ def main() -> None:
             "drive peak compile memory. Lower this if XLA runs out of memory."
         ),
     )
+    parser.add_argument(
+        "--coarse",
+        action="store_true",
+        help=(
+            "Use fifteen generating stations instead of nineteen. The "
+            "full-length lower band doubles the sections, and the full set "
+            "does not fit in 15 GB during the XLA compile."
+        ),
+    )
     parser.add_argument("--max-iter", type=int, default=12)
     parser.add_argument("--print-status", action="store_true")
     parser.add_argument(
@@ -190,7 +223,11 @@ def main() -> None:
     form_data = extract_dtmb_5415_form_data(
         reference, station_parameters=observation_stations
     )
-    section_stations = _default_section_stations(regions)
+    section_stations = (
+        _coarse_section_stations(regions)
+        if arguments.coarse
+        else _default_section_stations(regions)
+    )
     print(
         f"observations: {observation_stations.size} stations, "
         f"{int(np.sum(observation_stations <= regions[1].end))} inside the dome "
