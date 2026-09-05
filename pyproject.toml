@@ -21,10 +21,18 @@ authors = [
     {name = "Jeremy John"},
 ]
 dependencies = [
-    "numpy>=1.24",
-    "csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git",
-    "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git",
-    "lsdo_b_splines_cython @ git+https://github.com/LSDOlab/lsdo_b_splines_cython.git",
+    # numpy is held at 1.x because lsdo_b_splines_cython's extension modules
+    # are built against that ABI.
+    "numpy>=1.24,<2",
+    # These three are pinned to commits that work together. Taking them at
+    # HEAD is not safe: a build from HEAD on 2026-09-05 switched
+    # lsdo_function_spaces.BSplineSpace to a non-Cython implementation that
+    # imports csdl_alpha.experimental.CustomExplicitOperationBeta, which the
+    # matching csdl_alpha does not define, so the package raises at import.
+    # Move the pins deliberately, together, and re-run the tests.
+    "csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git@6540b02ce3817a9e2cdf89ffb83261db84e703b4",
+    "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git@a021f30821d6dc1f6de55e33bab9fcbc94520855",
+    "lsdo_b_splines_cython @ git+https://github.com/LSDOlab/lsdo_b_splines_cython.git@9444ea81f6fc58dabd68559323b13f0d549a383d",
     "vedo",
     "pyvista",
     "joblib",
