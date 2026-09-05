@@ -27,10 +27,20 @@ cd "${CLAUDE_PROJECT_DIR:-$(dirname "$0")/../..}"
 VENV=".venv"
 PYTHON="$VENV/bin/python"
 
-# Idempotent: an existing venv with a working import is left alone.
-if [ -x "$PYTHON" ] && "$PYTHON" - <<'CHECK' >/dev/null 2>&1
+# Idempotent: an existing venv with a working import is left alone. The check
+# includes whether JAX can see the GPU when the machine has one, so a venv
+# built before the hardware changed gets rebuilt rather than quietly running
+# on the CPU.
+WANT_CUDA=0
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+    WANT_CUDA=1
+fi
+if [ -x "$PYTHON" ] && WANT_CUDA="$WANT_CUDA" "$PYTHON" - <<'CHECK' >/dev/null 2>&1
+import os
 import numpy, jax, csdl_alpha, lsdo_b_splines_cython, lsdo_geo
 assert numpy.__version__.startswith("1."), numpy.__version__
+if os.environ.get("WANT_CUDA") == "1":
+    assert any(d.platform == "gpu" for d in jax.devices()), "no GPU device"
 CHECK
 then
     echo "environment already present: $("$PYTHON" -c 'import numpy,jax;print("numpy",numpy.__version__,"jax",jax.__version__)')"
@@ -54,7 +64,17 @@ fi
 # pyproject.toml pins the three LSDO commits, so this resolves to the
 # validated set rather than to whatever HEAD is today.
 "${INSTALL[@]}" -e ".[test]"
-"${INSTALL[@]}" "jax[cpu]"
+
+# JAX flavour follows the hardware. On WSL the CUDA runtime comes from the
+# Windows driver, so nvidia-smi answering inside the distribution is the
+# thing to test -- there is no Linux display driver to look for. The cuda12
+# wheels carry their own CUDA libraries, so nothing else needs installing.
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+    echo "CUDA device present: $(nvidia-smi -L | head -1)"
+    "${INSTALL[@]}" "jax[cuda12]"
+else
+    "${INSTALL[@]}" "jax[cpu]"
+fi
 # Last, so it wins over the numpy 2.x that jax pulls in; the Cython backend
 # needs numpy 1.x.
 "${INSTALL[@]}" "numpy==1.26.4"
@@ -70,5 +90,10 @@ space = lsdo_function_spaces.BSplineSpace(
     num_parametric_dimensions=1, degree=(3,), coefficients_shape=(6,)
 )
 assert space.compute_basis_matrix(numpy.array([[0.5]])).shape == (1, 6)
-print("numpy", numpy.__version__, "| jax", jax.__version__, "| basis backend ok")
+print(
+    "numpy", numpy.__version__,
+    "| jax", jax.__version__,
+    "| devices", jax.devices(),
+    "| basis backend ok",
+)
 VERIFY

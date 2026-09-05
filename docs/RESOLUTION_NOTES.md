@@ -104,6 +104,44 @@ would enter as a new objective term in `TensorProductSurface`, alongside
 `fairness_energy`, and would make the system nonlinear in a way the current
 one is not -- worth trying only once memory is not the binding constraint.
 
+## On WSL with an NVIDIA GPU
+
+Check the memory cap first, because it is the thing this work was actually
+limited by and WSL does not give you the machine's RAM by default. WSL2
+takes half of Windows' memory, and on older builds 8 GB, whatever the box
+has. In `C:\Users\<you>\.wslconfig`:
+
+```ini
+[wsl2]
+memory=48GB
+swap=16GB
+```
+
+then `wsl --shutdown` and reopen. Confirm inside the distribution with
+`free -g`. A 128 GB workstation that reports 24 GB to `free` will reproduce
+every ceiling in the table above.
+
+CUDA needs only the Windows driver; do not install a Linux display driver
+inside the distribution. `nvidia-smi -L` answering inside WSL is the test,
+and it is what the session hook keys on to choose `jax[cuda12]` over
+`jax[cpu]`. Those wheels carry their own CUDA libraries.
+
+Run the solve on the GPU with `--device gpu`; it defaults to CPU. Two things
+are worth knowing before assuming that is the faster choice:
+
+* The ceiling that killed runs here was **host** memory during XLA
+  compilation, not device memory. More RAM removes it. A GPU does not.
+* The solve depends on float64 -- the constraint residuals quoted throughout
+  are at 1e-15, and float32 cannot hold them. Consumer GeForce parts run
+  float64 at a small fraction of their float32 rate, so on such a card the
+  compiled solve may well be slower on the GPU than on the CPU. Datacenter
+  parts do not have that gap. Measure both rather than assuming; the run
+  prints `[jax] devices:` so it is clear which one produced a number.
+
+JAX preallocates most of the visible VRAM on first use. If that crowds out
+anything else, set `XLA_PYTHON_CLIENT_PREALLOCATE=false` or
+`XLA_PYTHON_CLIENT_MEM_FRACTION=0.8`.
+
 ## Two things that will bite
 
 The three LSDO dependencies are declared as git URLs and their heads are not

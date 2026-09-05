@@ -234,6 +234,17 @@ def main() -> None:
             "their observations essentially exactly."
         ),
     )
+    parser.add_argument(
+        "--device",
+        choices=("cpu", "gpu"),
+        default="cpu",
+        help=(
+            "Where the compiled solve runs. The KKT residuals here are at the "
+            "1e-15 level and depend on float64, which consumer NVIDIA parts "
+            "run at a small fraction of their float32 rate, so a GPU is not "
+            "automatically the faster choice for this solve."
+        ),
+    )
     parser.add_argument("--max-iter", type=int, default=12)
     parser.add_argument("--print-status", action="store_true")
     parser.add_argument(
@@ -547,11 +558,14 @@ def main() -> None:
         from csdl_alpha.experimental import JaxSimulator
 
         compile_start = time.time()
+        import jax
+
+        print(f"[jax] devices: {jax.devices()}")
         simulator = JaxSimulator(
             recorder=recorder,
             additional_inputs=[beam_input],
             additional_outputs=list(outputs.values()),
-            gpu=False,
+            gpu=arguments.device == "gpu",
         )
         simulator.run()
         print(f"[jax] JIT compile + solve in {time.time() - compile_start:.1f}s")
