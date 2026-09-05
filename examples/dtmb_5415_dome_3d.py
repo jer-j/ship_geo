@@ -74,18 +74,37 @@ def main() -> None:
     arguments = parser.parse_args()
     cache = np.load(arguments.cache)
 
-    dome = _grid(cache, "dome", (50, 110))
-    main = _grid(cache, "underwater", (60, 260))
-    dome_top = _edge(cache, "dome", 1.0)
-    main_low = _edge(cache, "underwater", 0.0)
+    # A unified hull is one surface: there is no separate lower band or
+    # freeboard to draw, and the blend line and waterline are curves on it
+    # rather than edges between patches.
+    unified = "coefficients_dome" not in cache.files
+    main = _grid(cache, "underwater", (70, 260))
+    if unified:
+        dome = None
+        blend = float(cache["blend_parameter"]) if "blend_parameter" in cache.files else 0.30
+        waterline = (
+            float(cache["waterline_parameter"])
+            if "waterline_parameter" in cache.files
+            else 0.65
+        )
+        dome_top = _edge(cache, "underwater", blend)
+        main_low = _edge(cache, "underwater", waterline)
+    else:
+        dome = _grid(cache, "dome", (50, 110))
+        dome_top = _edge(cache, "dome", 1.0)
+        main_low = _edge(cache, "underwater", 0.0)
 
     # The bulb itself, for the close views.
-    bulb_x = dome[:, :, 0].min() + 0.45
-    x_lo, x_hi = dome[:, :, 0].min(), bulb_x
+    reference_grid = main if dome is None else dome
+    bulb_x = reference_grid[:, :, 0].min() + 0.45
+    x_lo, x_hi = reference_grid[:, :, 0].min(), bulb_x
     keep = (main[0, :, 0] >= x_lo - 0.02) & (main[0, :, 0] <= x_hi + 0.10)
     main_near = main[:, keep]
-    dome_keep = (dome[0, :, 0] >= x_lo - 1.0e-9) & (dome[0, :, 0] <= x_hi)
-    dome_near = dome[:, dome_keep]
+    if dome is None:
+        dome_near = None
+    else:
+        dome_keep = (dome[0, :, 0] >= x_lo - 1.0e-9) & (dome[0, :, 0] <= x_hi)
+        dome_near = dome[:, dome_keep]
     stations = np.asarray(cache["section_stations"], dtype=float)
 
     dome_colour, main_colour, seam_colour = "#009e73", "#0072b2", "#d55e00"
@@ -99,26 +118,33 @@ def main() -> None:
     for index, (title, elev, azim) in enumerate(views):
         axis = figure.add_subplot(1, 3, index + 1, projection="3d")
         upper = main if index == 2 else main_near
-        lower = dome if index == 2 else dome_near
+        lower = (
+            None if dome is None else (dome if index == 2 else dome_near)
+        )
         axis.plot_surface(
             upper[:, :, 0], upper[:, :, 1], upper[:, :, 2],
-            color=main_colour, alpha=0.35, linewidth=0.0, shade=True,
-            rstride=2, cstride=4,
+            color=main_colour if lower is not None else dome_colour,
+            alpha=0.35 if lower is not None else 0.9,
+            linewidth=0.0, shade=True, rstride=2, cstride=4,
         )
-        axis.plot_surface(
-            lower[:, :, 0], lower[:, :, 1], lower[:, :, 2],
-            color=dome_colour, alpha=0.95, linewidth=0.0, shade=True,
-            rstride=1, cstride=2,
-        )
-        span = (dome_top[:, 0] >= lower[:, :, 0].min() - 1.0e-9) & (
-            dome_top[:, 0] <= lower[:, :, 0].max() + 1.0e-9
+        if lower is not None:
+            axis.plot_surface(
+                lower[:, :, 0], lower[:, :, 1], lower[:, :, 2],
+                color=dome_colour, alpha=0.95, linewidth=0.0, shade=True,
+                rstride=1, cstride=2,
+            )
+        extent = upper if lower is None else lower
+        span = (dome_top[:, 0] >= extent[:, :, 0].min() - 1.0e-9) & (
+            dome_top[:, 0] <= extent[:, :, 0].max() + 1.0e-9
         )
         axis.plot(dome_top[span, 0], dome_top[span, 1], dome_top[span, 2],
-                  color=seam_colour, linewidth=2.4, label="lower band, upper edge")
+                  color=seam_colour, linewidth=2.4,
+                  label="blend line" if unified else "lower band, upper edge")
         band = main_low[span]
         axis.plot(band[:, 0], band[:, 1], band[:, 2],
-                  color="black", linewidth=1.2, linestyle="--",
-                  label="upper band, lower edge")
+                  color="black", linewidth=1.4,
+                  linestyle="-" if unified else "--",
+                  label="waterline" if unified else "upper band, lower edge")
         if index == 2:
             length = float(cache["length"])
             origin = float(cache["coordinate_origin"])
@@ -129,7 +155,11 @@ def main() -> None:
         axis.view_init(elev=elev, azim=azim)
         axis.set_title(title, fontsize=10)
         axis.set_xlabel("x [m]"); axis.set_ylabel("y [m]"); axis.set_zlabel("z [m]")
-        pts = np.concatenate([lower.reshape(-1, 3), upper.reshape(-1, 3)])
+        pts = (
+            upper.reshape(-1, 3)
+            if lower is None
+            else np.concatenate([lower.reshape(-1, 3), upper.reshape(-1, 3)])
+        )
         if index == 2:
             # Equal aspect over the whole 5.7 m hull flattens it to a line, so
             # the full-length view is stretched across the beam and depth.
@@ -144,9 +174,9 @@ def main() -> None:
             axis.legend(loc="upper left", fontsize=8, frameon=False)
 
     figure.suptitle(
-        "DTMB 5415: everything below the blend line is a band of its own, lofted on "
-        "the hull's own stations.\nBlack dots are the generating sections; the two "
-        "edges are now one B-spline, not two that meet at them.",
+        "DTMB 5415 as one surface and one patch: keel to deck edge in a single "
+        "F-Spline per section.\nThe blend line and the waterline are curves on that "
+        "surface, not edges between patches.",
         fontsize=11,
     )
     figure.tight_layout()
@@ -154,10 +184,16 @@ def main() -> None:
     figure.savefig(arguments.output, dpi=170, bbox_inches="tight")
     print(f"wrote {arguments.output}")
 
-    gap = np.linalg.norm(
-        dome_top[:, None, :] - main_low[None, :, :], axis=2
-    ).min(axis=1)
-    print(f"seam gap: max {1.0e3 * gap.max():.3f} mm, mean {1.0e3 * gap.mean():.3f} mm")
+    if unified:
+        print("one surface: no patch boundary to measure")
+    else:
+        gap = np.linalg.norm(
+            dome_top[:, None, :] - main_low[None, :, :], axis=2
+        ).min(axis=1)
+        print(
+            f"seam gap: max {1.0e3 * gap.max():.3f} mm, "
+            f"mean {1.0e3 * gap.mean():.3f} mm"
+        )
 
 
 if __name__ == "__main__":

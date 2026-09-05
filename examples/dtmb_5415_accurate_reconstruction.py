@@ -654,6 +654,9 @@ def main() -> None:
         if key.startswith("coefficients_"):
             payload[key] = value
     payload["section_stations"] = section_data.station_parameters
+    if arguments.unify_bands:
+        payload["blend_parameter"] = np.asarray(BLEND_PARAMETER)
+        payload["waterline_parameter"] = np.asarray(WATERLINE_PARAMETER)
     payload["length"] = np.asarray(
         float(form_data.primary_parameters.length_between_perpendiculars)
     )
