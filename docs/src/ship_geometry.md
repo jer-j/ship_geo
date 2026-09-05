@@ -154,6 +154,13 @@ the section into lower-hull/sonar, transition, and upper-hull bands with $C^1$
 continuity. The sections still share one degree and knot vector, so skinning
 them produces one tensor-product surface rather than three patched surfaces.
 
+Inverse-fitting coordinates may be supplied as either one shared transverse
+vector or one vector per generating station. Station-specific correspondence
+can align a moving physical feature to the common band coordinate without
+changing any section's degree or knot vector. This is a fitting-data
+parameterization only. It does not make knot locations design-dependent inside
+the CSDL graph.
+
 The DTMB 5415 validation can execute this complete fixed-topology graph with
 `csdl_alpha.experimental.JaxSimulator`. JAX compiles the single implicit Newton
 solve and all requested validation outputs in 64-bit mode. The first compile is

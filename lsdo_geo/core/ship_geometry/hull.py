@@ -268,11 +268,18 @@ class SectionLoftProblem:
                 "section_fit_parameters and section_fit_points must be supplied "
                 "together."
             )
-        self.section_fit_parameters = (
-            None
-            if section_fit_parameters is None
-            else np.asarray(section_fit_parameters, dtype=float).reshape(-1)
-        )
+        self.section_fit_parameters = None
+        if section_fit_parameters is not None:
+            fit_parameters = np.asarray(section_fit_parameters, dtype=float)
+            if fit_parameters.ndim == 1 or (
+                fit_parameters.ndim == 2 and fit_parameters.shape[0] == parameters.size
+            ):
+                self.section_fit_parameters = fit_parameters
+            else:
+                raise ValueError(
+                    "section_fit_parameters must be one shared vector or have "
+                    "shape (num_sections, num_fit_parameters)."
+                )
         self.section_fit_points = section_fit_points
         self.section_fit_weight = float(section_fit_weight)
         if self.section_fit_weight < 0.0:
@@ -283,11 +290,8 @@ class SectionLoftProblem:
                 if isinstance(section_fit_points, csdl.Variable)
                 else np.shape(section_fit_points)
             )
-            expected = (
-                parameters.size,
-                self.section_fit_parameters.size,
-                2,
-            )
+            fit_count = self.section_fit_parameters.shape[-1]
+            expected = (parameters.size, fit_count, 2)
             if tuple(shape) != expected:
                 raise ValueError(
                     "section_fit_points must have shape "
@@ -340,7 +344,12 @@ class SectionLoftProblem:
                 num_control_points=self.num_section_control_points,
                 degree=self.section_degree,
                 fairness_weights=self.section_fairness_weights,
-                fit_parameters=self.section_fit_parameters,
+                fit_parameters=(
+                    self.section_fit_parameters
+                    if self.section_fit_parameters is None
+                    or self.section_fit_parameters.ndim == 1
+                    else self.section_fit_parameters[index]
+                ),
                 fit_points=(
                     None
                     if self.section_fit_points is None

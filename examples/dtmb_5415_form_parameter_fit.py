@@ -40,7 +40,7 @@ def _surface_section(
 
 def _combined_section_mesh(
     calibration: DTMB5415FormCalibration,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return station-sorted canonical and generated wireframe points."""
     fitting = calibration.section_fit_data
     validation = calibration.validation_section_data
@@ -53,10 +53,28 @@ def _combined_section_mesh(
         (fitting.longitudinal_coordinates, validation.longitudinal_coordinates)
     )
     section_points = np.concatenate((fitting.points, validation.points), axis=0)
+    fitting_model_parameters = (
+        np.tile(fitting.curve_parameters, (fitting.station_parameters.size, 1))
+        if fitting.model_curve_parameters is None
+        else fitting.model_curve_parameters
+    )
+    validation_model_parameters = (
+        np.tile(validation.curve_parameters, (validation.station_parameters.size, 1))
+        if validation.model_curve_parameters is None
+        else validation.model_curve_parameters
+    )
+    model_parameters = np.concatenate(
+        (
+            fitting_model_parameters,
+            validation_model_parameters,
+        ),
+        axis=0,
+    )
     order = np.argsort(stations)
     stations = stations[order]
     x_coordinates = x_coordinates[order]
     section_points = section_points[order]
+    model_parameters = model_parameters[order]
     exact = np.stack(
         (
             np.broadcast_to(x_coordinates[:, None], section_points.shape[:2]),
@@ -67,11 +85,11 @@ def _combined_section_mesh(
     )
     generated = np.stack(
         [
-            _surface_section(calibration, station, fitting.curve_parameters)
-            for station in stations
+            _surface_section(calibration, station, parameters)
+            for station, parameters in zip(stations, model_parameters)
         ]
     )
-    return exact, generated, stations
+    return exact, generated, stations, model_parameters
 
 
 def _draw_wireframe(
@@ -79,12 +97,12 @@ def _draw_wireframe(
     exact: np.ndarray,
     generated: np.ndarray,
     stations: np.ndarray,
+    model_parameters: np.ndarray,
     calibration: DTMB5415FormCalibration,
 ) -> None:
     """Draw two coincident-comparison wireframes without opaque surfaces."""
     dome_top = calibration.section_band_fit_targets.dome_top_parameter
     hull_blend = calibration.section_band_fit_targets.hull_blend_parameter
-    parameters = calibration.section_fit_data.curve_parameters
     bands = (
         (0.0, dome_top, "#d55e00"),
         (dome_top, hull_blend, "#e69f00"),
@@ -93,7 +111,7 @@ def _draw_wireframe(
 
     for section in exact:
         axis.plot(*section.T, color="0.35", linewidth=1.5, alpha=0.72)
-    for section in generated:
+    for section, parameters in zip(generated, model_parameters):
         for lower, upper, color in bands:
             mask = (parameters >= lower - 1.0e-12) & (parameters <= upper + 1.0e-12)
             axis.plot(
@@ -104,7 +122,7 @@ def _draw_wireframe(
             )
     for index in range(0, exact.shape[1], 2):
         axis.plot(*exact[:, index, :].T, color="0.35", linewidth=1.0, alpha=0.60)
-        parameter = parameters[index]
+        parameter = float(np.median(model_parameters[:, index]))
         color = next(
             color
             for lower, upper, color in bands
@@ -124,14 +142,17 @@ def _plot_surface_overlay(output: Path, calibration: DTMB5415FormCalibration) ->
     figure = plt.figure(figsize=(13.0, 5.8))
     perspective = figure.add_subplot(1, 2, 1, projection="3d")
     bow = figure.add_subplot(1, 2, 2, projection="3d")
-    exact, generated, stations = _combined_section_mesh(calibration)
-    _draw_wireframe(perspective, exact, generated, stations, calibration)
+    exact, generated, stations, model_parameters = _combined_section_mesh(calibration)
+    _draw_wireframe(
+        perspective, exact, generated, stations, model_parameters, calibration
+    )
     bow_mask = exact[:, 0, 0] <= -1.75
     _draw_wireframe(
         bow,
         exact[bow_mask],
         generated[bow_mask],
         stations[bow_mask],
+        model_parameters[bow_mask],
         calibration,
     )
     for axis in (perspective, bow):
@@ -338,7 +359,12 @@ def _plot_body_plan(output: Path, calibration: DTMB5415FormCalibration) -> None:
     for axis, (data, index, is_fit) in zip(axes.ravel(), entries):
         station = data.station_parameters[index]
         exact = data.points[index]
-        generated = _surface_section(calibration, station, data.curve_parameters)
+        model_parameters = (
+            data.curve_parameters
+            if data.model_curve_parameters is None
+            else data.model_curve_parameters[index]
+        )
+        generated = _surface_section(calibration, station, model_parameters)
         color = "#009e73" if is_fit else "#0072b2"
         axis.plot(exact[:, 1], exact[:, 0], color="0.25", linewidth=2.3)
         axis.plot(

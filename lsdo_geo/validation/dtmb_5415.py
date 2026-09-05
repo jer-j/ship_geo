@@ -139,6 +139,8 @@ class DTMB5415SectionFitData:
     points: np.ndarray
     longitudinal_coordinates: np.ndarray
     station_regions: tuple[DTMB5415Region, ...]
+    model_curve_parameters: np.ndarray | None = None
+    source_band_parameters: np.ndarray | None = None
 
 
 @dataclass
@@ -695,29 +697,104 @@ def dtmb_5415_section_band_fit_targets(
     if not 0.0 < dome_top < hull_blend < 1.0:
         raise ValueError("section bands require 0 < dome top < hull blend < 1.")
 
-    def interpolate(parameter: float) -> np.ndarray:
+    source_parameters = (
+        np.tile((dome_top, hull_blend), (section_data.station_parameters.size, 1))
+        if section_data.source_band_parameters is None
+        else section_data.source_band_parameters
+    )
+
+    def interpolate(parameters: np.ndarray) -> np.ndarray:
         return np.stack(
             [
                 np.array(
                     [
                         np.interp(
-                            parameter, section_data.curve_parameters, points[:, axis]
+                            parameter,
+                            section_data.curve_parameters,
+                            points[:, axis],
                         )
                         for axis in range(2)
                     ]
                 )
-                for points in section_data.points
+                for parameter, points in zip(parameters, section_data.points)
             ]
         )
 
     return SectionBandFitTargets(
         station_parameters=section_data.station_parameters,
-        dome_top_points=interpolate(dome_top),
-        hull_blend_points=interpolate(hull_blend),
+        dome_top_points=interpolate(source_parameters[:, 0]),
+        hull_blend_points=interpolate(source_parameters[:, 1]),
         dome_top_parameter=dome_top,
         hull_blend_parameter=hull_blend,
         continuity=continuity,
     ).validated()
+
+
+def align_dtmb_5415_section_bands(
+    section_data: DTMB5415SectionFitData,
+    dome_top_parameter: float = 11.0 / 16.0,
+    hull_blend_parameter: float = 14.0 / 16.0,
+) -> DTMB5415SectionFitData:
+    """Align moving sonar-neck features to one compatible section space.
+
+    The canonical sections are initially parameterized by normalized arc
+    length. In the forward sonar-dome region, the first breadth minimum after
+    the dome lobe identifies the physical dome top. A piecewise-linear map
+    sends that moving source location to one shared transverse interface. This
+    changes point correspondence only; every generated section still uses the
+    same degree and knot vector required by a single tensor-product surface.
+    """
+    target = np.array([dome_top_parameter, hull_blend_parameter], dtype=float)
+    if not 0.0 < target[0] < target[1] < 1.0:
+        raise ValueError("section bands require 0 < dome top < hull blend < 1.")
+    source = np.tile(target, (section_data.station_parameters.size, 1))
+    parameters = section_data.curve_parameters
+    upper_fraction = (target[1] - target[0]) / (1.0 - target[0])
+    for index, (region, points) in enumerate(
+        zip(section_data.station_regions, section_data.points)
+    ):
+        if region is not DTMB5415Region.SONAR_DOME:
+            continue
+        breadths = points[:, 1]
+        maxima = (
+            np.flatnonzero(
+                (breadths[1:-1] > breadths[:-2]) & (breadths[1:-1] >= breadths[2:])
+            )
+            + 1
+        )
+        if maxima.size == 0:
+            continue
+        maximum = int(maxima[0])
+        minima = (
+            np.flatnonzero(
+                (breadths[maximum + 1 : -1] <= breadths[maximum:-2])
+                & (breadths[maximum + 1 : -1] < breadths[maximum + 2 :])
+            )
+            + maximum
+            + 1
+        )
+        if minima.size == 0:
+            continue
+        dome_top = float(parameters[int(minima[0])])
+        hull_blend = dome_top + upper_fraction * (1.0 - dome_top)
+        source[index] = (dome_top, hull_blend)
+
+    model = np.empty((source.shape[0], parameters.size))
+    for index, (source_dome, source_blend) in enumerate(source):
+        model[index] = np.interp(
+            parameters,
+            (0.0, source_dome, source_blend, 1.0),
+            (0.0, target[0], target[1], 1.0),
+        )
+    return DTMB5415SectionFitData(
+        station_parameters=section_data.station_parameters.copy(),
+        curve_parameters=section_data.curve_parameters.copy(),
+        points=section_data.points.copy(),
+        longitudinal_coordinates=section_data.longitudinal_coordinates.copy(),
+        station_regions=section_data.station_regions,
+        model_curve_parameters=model,
+        source_band_parameters=source,
+    )
 
 
 def calibrate_dtmb_5415_form_hull(
@@ -872,11 +949,18 @@ def calibrate_dtmb_5415_form_hull(
         surface: TensorProductSurface,
     ) -> tuple:
         surface_points = []
-        for station in data.station_parameters:
+        model_parameters = (
+            np.tile(data.curve_parameters, (data.station_parameters.size, 1))
+            if data.model_curve_parameters is None
+            else data.model_curve_parameters
+        )
+        for station, transverse_parameters in zip(
+            data.station_parameters, model_parameters
+        ):
             parameters = np.column_stack(
                 (
-                    data.curve_parameters,
-                    np.full(data.curve_parameters.size, station),
+                    transverse_parameters,
+                    np.full(transverse_parameters.size, station),
                 )
             )
             surface_points.append(surface.evaluate(parameters))

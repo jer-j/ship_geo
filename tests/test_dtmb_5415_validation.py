@@ -11,6 +11,7 @@ from lsdo_geo.validation import (
     DTMB5415Region,
     DTMB5415SectionFitData,
     PolynomialIGESPatch,
+    align_dtmb_5415_section_bands,
     dtmb_5415_section_band_fit_targets,
     dtmb_5415_section_templates,
     extract_dtmb_5415_form_data,
@@ -266,3 +267,33 @@ def test_dtmb_section_band_targets_span_every_section():
     np.testing.assert_allclose(targets.dome_top_points, points[:, 5, :])
     np.testing.assert_allclose(targets.hull_blend_points, points[:, 7, :])
     assert targets.continuity == 1
+
+
+def test_dtmb_section_band_alignment_maps_moving_neck_to_shared_parameter():
+    parameters = np.linspace(0.0, 1.0, 9)
+    dome_points = np.column_stack(
+        (
+            np.linspace(-0.36, 0.0, 9),
+            [0.0, 0.07, 0.12, 0.08, 0.03, 0.02, 0.025, 0.035, 0.045],
+        )
+    )
+    main_points = np.column_stack(
+        (np.linspace(-0.248, 0.0, 9), np.linspace(0.0, 0.30, 9))
+    )
+    data = DTMB5415SectionFitData(
+        station_parameters=np.array([0.04, 0.50]),
+        curve_parameters=parameters,
+        points=np.stack((dome_points, main_points)),
+        longitudinal_coordinates=np.array([-2.63, 0.0]),
+        station_regions=(DTMB5415Region.SONAR_DOME, DTMB5415Region.MAIN_HULL),
+    )
+
+    aligned = align_dtmb_5415_section_bands(
+        data, dome_top_parameter=0.625, hull_blend_parameter=0.875
+    )
+
+    assert aligned.model_curve_parameters is not None
+    assert aligned.source_band_parameters is not None
+    np.testing.assert_allclose(aligned.source_band_parameters[0, 0], parameters[5])
+    np.testing.assert_allclose(aligned.model_curve_parameters[0, 5], 0.625)
+    np.testing.assert_allclose(aligned.model_curve_parameters[1], parameters)

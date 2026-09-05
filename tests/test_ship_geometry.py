@@ -228,6 +228,38 @@ def test_section_shape_fit_preserves_exact_form_constraints():
     recorder.stop()
 
 
+def test_section_loft_accepts_station_specific_fit_parameterization():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    shared = np.linspace(0.0, 1.0, 9)
+    fit_parameters = np.stack((shared**1.2, shared**0.8))
+    points = np.stack(
+        tuple(
+            np.column_stack((-1.0 + parameter, 0.8 * parameter))
+            for parameter in fit_parameters
+        )
+    )
+    hull = SectionLoftProblem(
+        length=4.0,
+        station_parameters=[0.25, 0.75],
+        drafts=[1.0, 1.0],
+        half_breadths=[0.8, 0.8],
+        half_areas=[0.4, 0.4],
+        keel_tangent_angles=[np.arctan(0.8), np.arctan(0.8)],
+        waterline_tangent_angles=[np.arctan(0.8), np.arctan(0.8)],
+        section_fit_parameters=fit_parameters,
+        section_fit_points=points,
+        section_fit_weight=100.0,
+        num_section_control_points=6,
+        longitudinal_degree=1,
+    ).solve(max_iter=30)
+
+    for section, parameters, target in zip(hull.sections, fit_parameters, points):
+        residual = np.asarray(section.evaluate(parameters).value) - target
+        assert np.sqrt(np.mean(np.sum(residual**2, axis=1))) < 1.0e-5
+    recorder.stop()
+
+
 def test_sectional_area_curve_integrals_and_implicit_derivative():
     recorder = csdl.Recorder(inline=True)
     recorder.start()

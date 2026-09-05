@@ -177,6 +177,10 @@ attachment height and breadth, and local tangency as CSDL-connected variables.
   plus local longitudinal knot refinement.
 - Execute the fixed-topology calibration with the CSDL JAX simulator while
   retaining a single global implicit Newton solve.
+- Support station-specific inverse-fit correspondence while preserving a common
+  compatible section space. A local-extremum DTMB neck detector was tested and
+  rejected as the default because holdout RMS/max increased to
+  $17.663/84.129\ \mathrm{mm}$; interface evolution needs a smooth fitted rule.
 
 ## Verification policy
 
