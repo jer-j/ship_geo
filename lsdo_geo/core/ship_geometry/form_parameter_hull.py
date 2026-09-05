@@ -396,6 +396,7 @@ class FormParameterHullProblem:
         section_fit_weight: float = 0.0,
         form_fit_weight: float = 1.0,
         form_fairness_weight: float = 1.0e-4,
+        surface_fairness_weight: float = 0.0,
         x_origin: Any = 0.0,
         longitudinal_regions: Sequence[LongitudinalLoftRegion] | None = None,
         use_fullness_curve: bool = False,
@@ -445,6 +446,7 @@ class FormParameterHullProblem:
         self.section_fit_weight = float(section_fit_weight)
         self.form_fit_weight = float(form_fit_weight)
         self.form_fairness_weight = float(form_fairness_weight)
+        self.surface_fairness_weight = float(surface_fairness_weight)
         self.x_origin = x_origin
         self.longitudinal_regions = (
             None if longitudinal_regions is None else tuple(longitudinal_regions)
@@ -1020,6 +1022,7 @@ class FormParameterHullProblem:
             dome_half_areas=dome_areas_for_sections,
             dome_fit_points=dome_fit_points,
             dome_mask=dome_mask,
+            longitudinal_fairness_weight=self.surface_fairness_weight,
             unify_bands=self.unify_bands,
             waterline_parameters=self.section_waterline_parameters,
             blend_parameters=blend_parameters,

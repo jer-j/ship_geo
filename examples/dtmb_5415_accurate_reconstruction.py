@@ -213,6 +213,27 @@ def main() -> None:
             "starts."
         ),
     )
+    parser.add_argument(
+        "--surface-fairness",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight on the surface's thin-plate energy. A loft applies no "
+            "fairing of its own, so without this the surface interpolates "
+            "whatever the sections do and the longitudinal lines are free to "
+            "wander."
+        ),
+    )
+    parser.add_argument(
+        "--form-fairness",
+        type=float,
+        default=1.0e-4,
+        help=(
+            "Weight on each longitudinal form curve's own fairness. Against a "
+            "fit weight of 100 the default leaves these curves interpolating "
+            "their observations essentially exactly."
+        ),
+    )
     parser.add_argument("--max-iter", type=int, default=12)
     parser.add_argument("--print-status", action="store_true")
     parser.add_argument(
@@ -430,6 +451,8 @@ def main() -> None:
         section_fit_points=section_data.points,
         section_fit_weight=250.0,
         form_fit_weight=100.0,
+        form_fairness_weight=arguments.form_fairness,
+        surface_fairness_weight=arguments.surface_fairness,
         use_fullness_curve=True,
         form_knots=piecewise_open_knots(
             arguments.num_form_control_points,

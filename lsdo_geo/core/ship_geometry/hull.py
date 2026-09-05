@@ -513,10 +513,30 @@ class SectionLoftProblem:
                 longitudinal_degree=self.longitudinal_degree,
                 name=f"{self.name}_surface",
             )
-            if self.longitudinal_fairness_weight:
-                system.add_objective(
-                    self.longitudinal_fairness_weight * surface.fairness_energy((0, 2))
-                )
+            if self.longitudinal_fairness_weight or self.surface_fairness_weights:
+                # The thin-plate energy of the surface, which is the quadratic
+                # surrogate for the curvature functional a fairing objective
+                # really wants: with a near-orthogonal parameterization
+                # integral(Quu^2 + 2 Quv^2 + Qvv^2) stands in for
+                # integral((k1 + k2)^2) dS and stays quadratic in the control
+                # points, so it costs the KKT system nothing extra. Lofting
+                # alone applies no fairing at all -- the surface simply
+                # interpolates whatever the sections do -- which is what let
+                # the longitudinal lines wander.
+                weights = self.surface_fairness_weights or {
+                    (2, 0): 1.0,
+                    (1, 1): 2.0,
+                    (0, 2): 1.0,
+                }
+                scale = self.longitudinal_fairness_weight or 1.0
+                energy = None
+                for orders, weight in weights.items():
+                    if not weight:
+                        continue
+                    term = weight * surface.fairness_energy(tuple(orders))
+                    energy = term if energy is None else energy + term
+                if energy is not None:
+                    system.add_objective(scale * energy)
         else:
             surface_assembly = self._assemble_variational_surface(
                 system,
