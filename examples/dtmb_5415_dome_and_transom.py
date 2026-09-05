@@ -33,7 +33,9 @@ from lsdo_geo.validation import (
     load_dtmb_5415,
 )
 
-DOME_STATIONS = (0.012, 0.026, 0.042, 0.058, 0.070, 0.090)
+# Through the dome and out past its closure, so the panels show the band
+# continuing where the neck no longer exists.
+DOME_STATIONS = (0.012, 0.032, 0.052, 0.072, 0.100, 0.150)
 
 
 def _save(figure: plt.Figure, path: Path) -> None:
@@ -132,6 +134,7 @@ def main() -> None:
                 linewidth=1.5, label="sonar-dome band",
             )
             # The blend point is where the two bands meet.
+            # The blend point is the top of the lower band.
             axis.plot(
                 dome_section[-1, 1], dome_section[-1, 2], "o", color="#d55e00",
                 markersize=4.5, zorder=5, label="blend point",
@@ -152,8 +155,9 @@ def main() -> None:
         bbox_to_anchor=(0.5, -0.06),
     )
     figure.suptitle(
-        "DTMB 5415 sonar dome: the bulb is a separate F-Spline band below a "
-        "blend line,\njoined to the main band with matching position and tangent",
+        "DTMB 5415: the blend line runs the whole hull -- the neck above the sonar "
+        "dome where there is one,\nand a fixed fraction of the local depth aft of "
+        "it. Everything below it is a band of its own.",
         fontsize=11,
     )
     figure.tight_layout()

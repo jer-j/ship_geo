@@ -1,15 +1,16 @@
-"""3D view of the reconstructed sonar dome, and the seam at its patch boundary.
+"""3D view of the hull's lower band and the blend line it meets the hull on.
 
-The dome is a partial-length patch carried below a blend line. Within a
-section it meets the main band by construction: both bands are built from the
-same blend-point and blend-tangent expressions, so position and slope agree
-exactly rather than by a fitted compromise.
+The blend line runs the whole length of the hull: the neck above the sonar
+dome where there is one, and a fixed fraction of the local depth aft of it.
+Everything below it is a band of its own.
 
-Along the loft they are two separate surfaces. The main hull interpolates
-every generating section; the dome interpolates only those that carry a band,
-with its own knot vector and its own local parameterization. Nothing ties
-them between sections, so the panels here draw the seam and report how far
-apart the two edges actually run.
+The two bands meet twice over. Within a section they are built from the same
+blend-point and blend-tangent expressions, so position and slope agree
+exactly rather than by a fitted compromise. Along the loft, because the band
+now exists at every station, it is lofted on the hull's own stations,
+parameters and x coordinates -- so the shared edge is the same B-spline on
+both surfaces, not two curves that happen to agree where sections fall. The
+script reports the distance between them as a check.
 
 Surfaces are evaluated from the cached control nets rather than from the
 sampled meshes, so the pictures show the geometry itself.
@@ -78,10 +79,14 @@ def main() -> None:
     dome_top = _edge(cache, "dome", 1.0)
     main_low = _edge(cache, "underwater", 0.0)
 
-    x_lo, x_hi = dome[:, :, 0].min(), dome[:, :, 0].max()
-    # The stretch of main hull alongside the dome, plus a little aft of it.
-    keep = (main[0, :, 0] >= x_lo - 0.02) & (main[0, :, 0] <= x_hi + 0.35)
+    # The bulb itself, for the close views.
+    bulb_x = dome[:, :, 0].min() + 0.45
+    x_lo, x_hi = dome[:, :, 0].min(), bulb_x
+    keep = (main[0, :, 0] >= x_lo - 0.02) & (main[0, :, 0] <= x_hi + 0.10)
     main_near = main[:, keep]
+    dome_keep = (dome[0, :, 0] >= x_lo - 1.0e-9) & (dome[0, :, 0] <= x_hi)
+    dome_near = dome[:, dome_keep]
+    stations = np.asarray(cache["section_stations"], dtype=float)
 
     dome_colour, main_colour, seam_colour = "#009e73", "#0072b2", "#d55e00"
     figure = plt.figure(figsize=(16.5, 5.4))
@@ -89,50 +94,59 @@ def main() -> None:
     views = [
         ("sonar dome and the hull above it", 22, -62),
         ("looking up from below and forward", -18, -128),
-        ("the blend seam along the patch boundary", 8, -95),
+        ("the band runs the whole length", 16, -68),
     ]
     for index, (title, elev, azim) in enumerate(views):
         axis = figure.add_subplot(1, 3, index + 1, projection="3d")
-        if index < 2:
-            axis.plot_surface(
-                main_near[:, :, 0], main_near[:, :, 1], main_near[:, :, 2],
-                color=main_colour, alpha=0.35, linewidth=0.0, shade=True,
-                rstride=2, cstride=4,
-            )
+        upper = main if index == 2 else main_near
+        lower = dome if index == 2 else dome_near
         axis.plot_surface(
-            dome[:, :, 0], dome[:, :, 1], dome[:, :, 2],
+            upper[:, :, 0], upper[:, :, 1], upper[:, :, 2],
+            color=main_colour, alpha=0.35, linewidth=0.0, shade=True,
+            rstride=2, cstride=4,
+        )
+        axis.plot_surface(
+            lower[:, :, 0], lower[:, :, 1], lower[:, :, 2],
             color=dome_colour, alpha=0.95, linewidth=0.0, shade=True,
             rstride=1, cstride=2,
         )
-        band = main_low[
-            (main_low[:, 0] >= x_lo - 1.0e-9) & (main_low[:, 0] <= x_hi + 1.0e-9)
-        ]
-        axis.plot(dome_top[:, 0], dome_top[:, 1], dome_top[:, 2],
-                  color=seam_colour, linewidth=2.2, label="dome band, upper edge")
+        span = (dome_top[:, 0] >= lower[:, :, 0].min() - 1.0e-9) & (
+            dome_top[:, 0] <= lower[:, :, 0].max() + 1.0e-9
+        )
+        axis.plot(dome_top[span, 0], dome_top[span, 1], dome_top[span, 2],
+                  color=seam_colour, linewidth=2.4, label="lower band, upper edge")
+        band = main_low[span]
         axis.plot(band[:, 0], band[:, 1], band[:, 2],
                   color="black", linewidth=1.2, linestyle="--",
-                  label="main band, lower edge")
+                  label="upper band, lower edge")
         if index == 2:
-            for station in (0.012, 0.025, 0.038, 0.051, 0.063):
-                length = float(cache["length"])
-                origin = float(cache["coordinate_origin"])
-                x = origin - 0.5 * length + length * station
+            length = float(cache["length"])
+            origin = float(cache["coordinate_origin"])
+            for station in stations:
+                x = origin - 0.5 * length + length * float(station)
                 j = int(np.argmin(np.abs(dome_top[:, 0] - x)))
-                axis.scatter(*dome_top[j], color="black", s=16, zorder=6)
+                axis.scatter(*dome_top[j], color="black", s=14, zorder=6)
         axis.view_init(elev=elev, azim=azim)
         axis.set_title(title, fontsize=10)
         axis.set_xlabel("x [m]"); axis.set_ylabel("y [m]"); axis.set_zlabel("z [m]")
-        pts = dome.reshape(-1, 3) if index == 2 else np.concatenate(
-            [dome.reshape(-1, 3), main_near.reshape(-1, 3)]
-        )
-        _equal_aspect(axis, pts)
+        pts = np.concatenate([lower.reshape(-1, 3), upper.reshape(-1, 3)])
+        if index == 2:
+            # Equal aspect over the whole 5.7 m hull flattens it to a line, so
+            # the full-length view is stretched across the beam and depth.
+            axis.set_box_aspect((3.4, 1.0, 0.9))
+            for setter, column in (
+                (axis.set_xlim, 0), (axis.set_ylim, 1), (axis.set_zlim, 2)
+            ):
+                setter(pts[:, column].min(), pts[:, column].max())
+        else:
+            _equal_aspect(axis, pts)
         if index == 0:
             axis.legend(loc="upper left", fontsize=8, frameon=False)
 
     figure.suptitle(
-        "DTMB 5415 sonar dome as its own F-Spline patch. Black dots mark the five "
-        "generating sections,\nthe only places the dome patch and the hull patch are "
-        "tied together.",
+        "DTMB 5415: everything below the blend line is a band of its own, lofted on "
+        "the hull's own stations.\nBlack dots are the generating sections; the two "
+        "edges are now one B-spline, not two that meet at them.",
         fontsize=11,
     )
     figure.tight_layout()
@@ -140,11 +154,8 @@ def main() -> None:
     figure.savefig(arguments.output, dpi=170, bbox_inches="tight")
     print(f"wrote {arguments.output}")
 
-    band = main_low[
-        (main_low[:, 0] >= x_lo - 1.0e-9) & (main_low[:, 0] <= x_hi + 1.0e-9)
-    ]
     gap = np.linalg.norm(
-        dome_top[:, None, :] - band[None, :, :], axis=2
+        dome_top[:, None, :] - main_low[None, :, :], axis=2
     ).min(axis=1)
     print(f"seam gap: max {1.0e3 * gap.max():.3f} mm, mean {1.0e3 * gap.mean():.3f} mm")
 
