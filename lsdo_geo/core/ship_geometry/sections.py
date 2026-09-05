@@ -30,6 +30,7 @@ class SectionTemplate(str, Enum):
     ROUND_BILGE = "round_bilge"
     HARD_CHINE = "hard_chine"
     SONAR_DOME = "sonar_dome"
+    BLENDED_SONAR_DOME = "blended_sonar_dome"
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,62 @@ class SonarDomeSectionParameters:
                 "sonar-dome parameters must satisfy 0 < maximum breadth "
                 "parameter < attachment parameter < 1."
             )
+
+
+@dataclass(frozen=True)
+class SectionBandParameters:
+    """Guide points separating dome, transition, and upper-hull bands.
+
+    The curve runs from its lower centerplane endpoint to the waterline. The
+    dome band ends at ``dome_top_parameter``; the transition band then ends at
+    ``hull_blend_parameter``. A common parameter pair and continuity order must
+    be used by every section in one compatible loft.
+    """
+
+    dome_top_parameter: float
+    dome_top_point: Any
+    hull_blend_parameter: float
+    hull_blend_point: Any
+    continuity: int = 1
+
+    def knots(self, num_control_points: int, degree: int) -> np.ndarray:
+        """Return a compatible knot vector with explicit band interfaces."""
+        dome_top = float(self.dome_top_parameter)
+        hull_blend = float(self.hull_blend_parameter)
+        if not 0.0 < dome_top < hull_blend < 1.0:
+            raise ValueError("section bands require 0 < dome top < hull blend < 1.")
+        continuity = int(self.continuity)
+        if continuity < 0 or continuity >= degree:
+            raise ValueError("band continuity must satisfy 0 <= k < degree.")
+        interior_count = num_control_points - degree - 1
+        multiplicity = degree - continuity
+        remaining = interior_count - 2 * multiplicity
+        if remaining < 0:
+            raise ValueError(
+                "insufficient control points for the requested band continuity."
+            )
+        boundaries = np.array([0.0, dome_top, hull_blend, 1.0])
+        allocations = np.zeros(3, dtype=int)
+        for _ in range(remaining):
+            span_lengths = np.diff(boundaries) / (allocations + 1)
+            allocations[int(np.argmax(span_lengths))] += 1
+        extras = []
+        for index, count in enumerate(allocations):
+            if count:
+                extras.extend(
+                    np.linspace(boundaries[index], boundaries[index + 1], count + 2)[
+                        1:-1
+                    ]
+                )
+        interior = np.sort(
+            np.concatenate(
+                (
+                    np.repeat([dome_top, hull_blend], multiplicity),
+                    np.asarray(extras),
+                )
+            )
+        )
+        return np.concatenate((np.zeros(degree + 1), interior, np.ones(degree + 1)))
 
 
 def _vector2(first: Any, second: Any) -> Any:
@@ -150,6 +207,7 @@ class SectionProblem:
         chine_parameter: float = 0.5,
         chine_point: Any | None = None,
         sonar_dome_parameters: SonarDomeSectionParameters | None = None,
+        section_band_parameters: SectionBandParameters | None = None,
         num_control_points: int = 8,
         degree: int = 3,
         fairness_weights: dict[int, float] | None = None,
@@ -209,6 +267,17 @@ class SectionProblem:
                 "sonar_dome_parameters may only be used with the sonar-dome "
                 "section template."
             )
+        if self.template is SectionTemplate.BLENDED_SONAR_DOME:
+            if section_band_parameters is None:
+                raise ValueError(
+                    "blended sonar-dome sections require section_band_parameters."
+                )
+            knots = section_band_parameters.knots(num_control_points, degree)
+        elif section_band_parameters is not None:
+            raise ValueError(
+                "section_band_parameters may only be used with the blended "
+                "sonar-dome template."
+            )
         self.problem = FSplineProblem(
             num_control_points=num_control_points,
             degree=degree,
@@ -249,6 +318,16 @@ class SectionProblem:
                     dome.attachment_parameter,
                     dome.attachment_tangent_angle,
                 )
+        if self.template is SectionTemplate.BLENDED_SONAR_DOME:
+            bands = section_band_parameters
+            if bands is None:  # pragma: no cover - validated above
+                raise RuntimeError("section band parameters are missing.")
+            self.problem.add_point_constraint(
+                bands.dome_top_parameter, bands.dome_top_point
+            )
+            self.problem.add_point_constraint(
+                bands.hull_blend_parameter, bands.hull_blend_point
+            )
         self.problem.add_area_constraint(half_area)
 
     def assemble(

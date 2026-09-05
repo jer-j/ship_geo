@@ -30,7 +30,11 @@ from .form_curves import (
     FormCurveProblem,
 )
 from .hull import HullGeometry, SectionLoftAssembly, SectionLoftProblem
-from .sections import SectionTemplate, SonarDomeSectionParameters
+from .sections import (
+    SectionBandParameters,
+    SectionTemplate,
+    SonarDomeSectionParameters,
+)
 from .surfaces import LongitudinalLoftRegion
 
 
@@ -135,6 +139,70 @@ class LongitudinalFitTargets:
         )
 
 
+@dataclass(frozen=True)
+class SectionBandFitTargets:
+    """Auxiliary observations for fair hull/dome interface guide curves.
+
+    Points use the transverse section convention ``(z, y)``. The two fixed
+    transverse parameters define the representation topology. Their physical
+    coordinates are fitted longitudinally, so the resulting interface curves
+    are smooth CSDL expressions rather than independent section observations.
+    """
+
+    station_parameters: npt.ArrayLike
+    dome_top_points: Any
+    hull_blend_points: Any
+    dome_top_parameter: float
+    hull_blend_parameter: float
+    continuity: int = 1
+
+    def validated(self) -> SectionBandFitTargets:
+        """Return normalized targets after deterministic topology checks."""
+        stations = np.asarray(self.station_parameters, dtype=float).reshape(-1)
+        if (
+            stations.size < 3
+            or np.any(np.diff(stations) <= 0.0)
+            or np.any((stations <= 0.0) | (stations > 1.0))
+        ):
+            raise ValueError(
+                "section-band stations must increase strictly inside (0, 1]."
+            )
+        dome_top = float(self.dome_top_parameter)
+        hull_blend = float(self.hull_blend_parameter)
+        if not 0.0 < dome_top < hull_blend < 1.0:
+            raise ValueError("section bands require 0 < dome top < hull blend < 1.")
+        continuity = int(self.continuity)
+        if continuity not in (1, 2):
+            raise ValueError("section-band continuity must be one or two.")
+        points = []
+        for values, name in (
+            (self.dome_top_points, "dome_top_points"),
+            (self.hull_blend_points, "hull_blend_points"),
+        ):
+            shape = (
+                values.shape if isinstance(values, csdl.Variable) else np.shape(values)
+            )
+            if tuple(shape) != (stations.size, 2):
+                raise ValueError(f"{name} must have shape ({stations.size}, 2).")
+            if not isinstance(values, csdl.Variable) and not np.all(
+                np.isfinite(np.asarray(values, dtype=float))
+            ):
+                raise ValueError(f"{name} must contain finite values.")
+            points.append(
+                values
+                if isinstance(values, csdl.Variable)
+                else np.asarray(values, dtype=float)
+            )
+        return SectionBandFitTargets(
+            station_parameters=stations,
+            dome_top_points=points[0],
+            hull_blend_points=points[1],
+            dome_top_parameter=dome_top,
+            hull_blend_parameter=hull_blend,
+            continuity=continuity,
+        )
+
+
 @dataclass
 class FormParameterHullGeometry:
     """Solved hull plus its naval-architecture longitudinal form curves."""
@@ -145,6 +213,7 @@ class FormParameterHullGeometry:
     draft_curve: FormCurve
     deadrise_curve: FormCurve
     flare_curve: FormCurve
+    section_band_curves: dict[str, FormCurve]
     curve_network: HullCurveNetwork
     primary_parameters: NavalHullParameters
     maximum_beam_parameter: float
@@ -192,6 +261,16 @@ class FormParameterHullAssembly:
             draft_curve=curves[FormCurveKind.KEEL_PROFILE],
             deadrise_curve=curves[FormCurveKind.DEADRISE],
             flare_curve=curves[FormCurveKind.FLARE],
+            section_band_curves={
+                kind.value: curves[kind]
+                for kind in (
+                    FormCurveKind.DOME_TOP_HEIGHT,
+                    FormCurveKind.DOME_TOP_HALF_BREADTH,
+                    FormCurveKind.HULL_BLEND_HEIGHT,
+                    FormCurveKind.HULL_BLEND_HALF_BREADTH,
+                )
+                if kind in curves
+            },
             curve_network=self.curve_network,
             primary_parameters=self.primary_parameters,
             maximum_beam_parameter=self.maximum_beam_parameter,
@@ -222,6 +301,7 @@ class FormParameterHullProblem:
         section_templates: Sequence[SectionTemplate] | None = None,
         sonar_dome_parameters: Sequence[SonarDomeSectionParameters | None]
         | None = None,
+        section_band_fit_targets: SectionBandFitTargets | None = None,
         form_fit_weight: float = 1.0,
         form_fairness_weight: float = 1.0e-4,
         x_origin: Any = 0.0,
@@ -260,6 +340,33 @@ class FormParameterHullProblem:
         self.section_fit_weight = float(section_fit_weight)
         self.section_templates = section_templates
         self.sonar_dome_parameters = sonar_dome_parameters
+        self.section_band_fit_targets = (
+            None
+            if section_band_fit_targets is None
+            else section_band_fit_targets.validated()
+        )
+        if self.section_band_fit_targets is not None:
+            band_templates = (SectionTemplate.BLENDED_SONAR_DOME,) * len(
+                section_stations
+            )
+            if (
+                section_templates is not None
+                and tuple(SectionTemplate(item) for item in section_templates)
+                != band_templates
+            ):
+                raise ValueError(
+                    "section_band_fit_targets require blended sonar-dome "
+                    "templates at every loft station."
+                )
+            if sonar_dome_parameters is not None and any(
+                item is not None for item in sonar_dome_parameters
+            ):
+                raise ValueError(
+                    "section_band_fit_targets replace isolated sonar-dome "
+                    "section parameters."
+                )
+            self.section_templates = band_templates
+            self.sonar_dome_parameters = (None,) * len(section_stations)
         self.form_fit_weight = float(form_fit_weight)
         self.form_fairness_weight = float(form_fairness_weight)
         self.x_origin = x_origin
@@ -334,12 +441,45 @@ class FormParameterHullProblem:
             FormCurveKind.DEADRISE: self.targets.deadrise_angles,
             FormCurveKind.FLARE: self.targets.flare_angles,
         }
+        band_targets = self.section_band_fit_targets
+        if band_targets is not None:
+            for kind in (
+                FormCurveKind.DOME_TOP_HEIGHT,
+                FormCurveKind.DOME_TOP_HALF_BREADTH,
+                FormCurveKind.HULL_BLEND_HEIGHT,
+                FormCurveKind.HULL_BLEND_HALF_BREADTH,
+            ):
+                problems[kind] = self._problem(kind)
+            target_map.update(
+                {
+                    FormCurveKind.DOME_TOP_HEIGHT: -band_targets.dome_top_points[:, 0],
+                    FormCurveKind.DOME_TOP_HALF_BREADTH: (
+                        band_targets.dome_top_points[:, 1]
+                    ),
+                    FormCurveKind.HULL_BLEND_HEIGHT: -band_targets.hull_blend_points[
+                        :, 0
+                    ],
+                    FormCurveKind.HULL_BLEND_HALF_BREADTH: (
+                        band_targets.hull_blend_points[:, 1]
+                    ),
+                }
+            )
         assemblies = {
             kind: problem.assemble(
                 system,
                 self._initial_form_coefficients(
                     problem,
-                    fit_stations,
+                    (
+                        fit_stations
+                        if kind
+                        not in (
+                            FormCurveKind.DOME_TOP_HEIGHT,
+                            FormCurveKind.DOME_TOP_HALF_BREADTH,
+                            FormCurveKind.HULL_BLEND_HEIGHT,
+                            FormCurveKind.HULL_BLEND_HALF_BREADTH,
+                        )
+                        else np.asarray(band_targets.station_parameters)
+                    ),
                     target_map[kind],
                     zero_at_bow=kind
                     in (
@@ -358,9 +498,30 @@ class FormParameterHullProblem:
             FormCurveKind.DEADRISE: 1.0,
             FormCurveKind.FLARE: 1.0,
         }
+        scales.update(
+            {
+                FormCurveKind.DOME_TOP_HEIGHT: 1.0 / _scalar_value(draft),
+                FormCurveKind.DOME_TOP_HALF_BREADTH: 2.0 / _scalar_value(beam),
+                FormCurveKind.HULL_BLEND_HEIGHT: 1.0 / _scalar_value(draft),
+                FormCurveKind.HULL_BLEND_HALF_BREADTH: 2.0 / _scalar_value(beam),
+            }
+        )
         for kind, assembly in assemblies.items():
+            target_stations = (
+                fit_stations
+                if kind
+                not in (
+                    FormCurveKind.DOME_TOP_HEIGHT,
+                    FormCurveKind.DOME_TOP_HALF_BREADTH,
+                    FormCurveKind.HULL_BLEND_HEIGHT,
+                    FormCurveKind.HULL_BLEND_HALF_BREADTH,
+                )
+                else np.asarray(band_targets.station_parameters)
+            )
             residual = scales[kind] * (
-                assembly.curve.evaluate(fit_stations).reshape((fit_stations.size,))
+                assembly.curve.evaluate(target_stations).reshape(
+                    (target_stations.size,)
+                )
                 - target_map[kind]
             )
             system.add_objective(self.form_fit_weight * csdl.sum(residual**2))
@@ -380,10 +541,54 @@ class FormParameterHullProblem:
                 ],
                 ControlCurveName.TANGENT_AT_KEEL: curves[FormCurveKind.DEADRISE],
             },
+            local_feature_curves={
+                kind.value: curves[kind]
+                for kind in (
+                    FormCurveKind.DOME_TOP_HEIGHT,
+                    FormCurveKind.DOME_TOP_HALF_BREADTH,
+                    FormCurveKind.HULL_BLEND_HEIGHT,
+                    FormCurveKind.HULL_BLEND_HALF_BREADTH,
+                )
+                if kind in curves
+            },
         )
         section_controls = curve_network.evaluate_section_controls(
             section_stations, length
         )
+        section_band_parameters = None
+        if band_targets is not None:
+            dome_heights = curves[FormCurveKind.DOME_TOP_HEIGHT].evaluate(
+                section_stations
+            )
+            dome_breadths = curves[FormCurveKind.DOME_TOP_HALF_BREADTH].evaluate(
+                section_stations
+            )
+            blend_heights = curves[FormCurveKind.HULL_BLEND_HEIGHT].evaluate(
+                section_stations
+            )
+            blend_breadths = curves[FormCurveKind.HULL_BLEND_HALF_BREADTH].evaluate(
+                section_stations
+            )
+            section_band_parameters = tuple(
+                SectionBandParameters(
+                    dome_top_parameter=band_targets.dome_top_parameter,
+                    dome_top_point=csdl.concatenate(
+                        (
+                            -dome_heights[index].reshape((1,)),
+                            dome_breadths[index].reshape((1,)),
+                        )
+                    ),
+                    hull_blend_parameter=band_targets.hull_blend_parameter,
+                    hull_blend_point=csdl.concatenate(
+                        (
+                            -blend_heights[index].reshape((1,)),
+                            blend_breadths[index].reshape((1,)),
+                        )
+                    ),
+                    continuity=band_targets.continuity,
+                )
+                for index in range(section_stations.size)
+            )
         section_problem = SectionLoftProblem(
             length=length,
             station_parameters=section_stations,
@@ -400,6 +605,7 @@ class FormParameterHullProblem:
             section_fit_weight=self.section_fit_weight,
             section_templates=self.section_templates,
             sonar_dome_parameters=self.sonar_dome_parameters,
+            section_band_parameters=section_band_parameters,
             longitudinal_regions=self.longitudinal_regions,
             longitudinal_feature_parameters=self.longitudinal_feature_parameters,
             longitudinal_feature_continuity=self.longitudinal_feature_continuity,

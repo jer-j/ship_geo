@@ -37,6 +37,10 @@ class FormCurveKind(str, Enum):
     DEADRISE = "deadrise"
     FLARE = "flare"
     FULLNESS = "fullness"
+    DOME_TOP_HEIGHT = "dome_top_height"
+    DOME_TOP_HALF_BREADTH = "dome_top_half_breadth"
+    HULL_BLEND_HEIGHT = "hull_blend_height"
+    HULL_BLEND_HALF_BREADTH = "hull_blend_half_breadth"
 
 
 def _coerce_target(value: Any) -> Any:

@@ -18,6 +18,7 @@ from .f_surface import FSurfaceAssembly, FSurfaceProblem
 from .hydrostatics import Hydrostatics, compute_hydrostatics
 from .sections import (
     SectionAssembly,
+    SectionBandParameters,
     SectionProblem,
     SectionTemplate,
     SonarDomeSectionParameters,
@@ -131,6 +132,7 @@ class SectionLoftProblem:
         section_templates: Sequence[SectionTemplate] | None = None,
         sonar_dome_parameters: Sequence[SonarDomeSectionParameters | None]
         | None = None,
+        section_band_parameters: Sequence[SectionBandParameters | None] | None = None,
         num_section_control_points: int = 8,
         section_degree: int = 3,
         longitudinal_degree: int = 3,
@@ -193,6 +195,31 @@ class SectionLoftProblem:
                     "each sonar-dome template requires matching dome parameters, "
                     "and other templates must use None."
                 )
+        if section_band_parameters is None:
+            section_band_parameters = (None,) * parameters.size
+        if len(section_band_parameters) != parameters.size:
+            raise ValueError("section_band_parameters must match station_parameters.")
+        for template, bands in zip(templates, section_band_parameters):
+            if (template is SectionTemplate.BLENDED_SONAR_DOME) != (bands is not None):
+                raise ValueError(
+                    "each blended sonar-dome template requires matching section "
+                    "band parameters, and other templates must use None."
+                )
+        active_bands = [bands for bands in section_band_parameters if bands is not None]
+        if active_bands:
+            reference = active_bands[0]
+            for bands in active_bands[1:]:
+                if not (
+                    np.isclose(bands.dome_top_parameter, reference.dome_top_parameter)
+                    and np.isclose(
+                        bands.hull_blend_parameter, reference.hull_blend_parameter
+                    )
+                    and bands.continuity == reference.continuity
+                ):
+                    raise ValueError(
+                        "all section bands in a compatible loft must share their "
+                        "interface parameters and continuity order."
+                    )
         if keel_tangent_angles is None:
             keel_tangent_angles = np.zeros(parameters.size)
         if waterline_tangent_angles is None:
@@ -220,6 +247,7 @@ class SectionLoftProblem:
         self.waterline_tangent_angles = waterline_tangent_angles
         self.section_templates = templates
         self.sonar_dome_parameters = tuple(sonar_dome_parameters)
+        self.section_band_parameters = tuple(section_band_parameters)
         self.num_section_control_points = int(num_section_control_points)
         self.section_degree = int(section_degree)
         self.longitudinal_degree = int(longitudinal_degree)
@@ -308,6 +336,7 @@ class SectionLoftProblem:
                 ),
                 template=self.section_templates[index],
                 sonar_dome_parameters=self.sonar_dome_parameters[index],
+                section_band_parameters=self.section_band_parameters[index],
                 num_control_points=self.num_section_control_points,
                 degree=self.section_degree,
                 fairness_weights=self.section_fairness_weights,

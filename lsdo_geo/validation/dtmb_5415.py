@@ -18,6 +18,7 @@ from ..core.ship_geometry.form_parameter_hull import (
     FormParameterHullProblem,
     LongitudinalFitTargets,
     NavalHullParameters,
+    SectionBandFitTargets,
 )
 from ..core.ship_geometry.refinement import fit_offset_surface
 from ..core.ship_geometry.sections import (
@@ -147,6 +148,7 @@ class DTMB5415FormCalibration:
     geometry: FormParameterHullGeometry
     form_data: DTMB5415FormData
     section_fit_data: DTMB5415SectionFitData
+    section_band_fit_targets: SectionBandFitTargets
     primary_parameter_errors: dict[str, float]
     auxiliary_rms_errors: dict[str, float]
     fitting_section_rms_error: float
@@ -674,11 +676,55 @@ def dtmb_5415_section_templates(
     return tuple(templates), tuple(dome_parameters)
 
 
+def dtmb_5415_section_band_fit_targets(
+    section_data: DTMB5415SectionFitData,
+    dome_top_parameter: float = 11.0 / 16.0,
+    hull_blend_parameter: float = 14.0 / 16.0,
+    continuity: int = 1,
+) -> SectionBandFitTargets:
+    """Extract compatible longitudinal guide targets from canonical sections.
+
+    The lower guide is the top of the dome and bottom of the transition. The
+    upper guide is the top of the transition and bottom of the ordinary hull.
+    Both are sampled at the same transverse parameters in every section, so
+    they form complete longitudinal curves rather than a forward-only topology
+    switch.
+    """
+    dome_top = float(dome_top_parameter)
+    hull_blend = float(hull_blend_parameter)
+    if not 0.0 < dome_top < hull_blend < 1.0:
+        raise ValueError("section bands require 0 < dome top < hull blend < 1.")
+
+    def interpolate(parameter: float) -> np.ndarray:
+        return np.stack(
+            [
+                np.array(
+                    [
+                        np.interp(
+                            parameter, section_data.curve_parameters, points[:, axis]
+                        )
+                        for axis in range(2)
+                    ]
+                )
+                for points in section_data.points
+            ]
+        )
+
+    return SectionBandFitTargets(
+        station_parameters=section_data.station_parameters,
+        dome_top_points=interpolate(dome_top),
+        hull_blend_points=interpolate(hull_blend),
+        dome_top_parameter=dome_top,
+        hull_blend_parameter=hull_blend,
+        continuity=continuity,
+    ).validated()
+
+
 def calibrate_dtmb_5415_form_hull(
     reference: DTMB5415Reference,
     section_station_parameters: npt.ArrayLike | None = None,
     num_form_control_points: int = 10,
-    num_section_control_points: int = 8,
+    num_section_control_points: int = 10,
     form_fit_weight: float = 100.0,
     section_fit_weight: float = 250.0,
     validation_station_parameters: npt.ArrayLike = (
@@ -696,8 +742,24 @@ def calibrate_dtmb_5415_form_hull(
     tolerance: float = 1.0e-10,
     max_iter: int = 50,
     print_status: bool = False,
+    backend: Literal["inline", "jax"] = "inline",
 ) -> DTMB5415FormCalibration:
-    """Calibrate a naval-variable hull while preserving primary particulars."""
+    """Calibrate a naval-variable hull while preserving primary particulars.
+
+    The JAX backend requires an active recorder created with ``inline=False``.
+    It compiles the complete CSDL graph, including the single implicit Newton
+    operation, before evaluating every validation output in one execution.
+    """
+    if backend not in ("inline", "jax"):
+        raise ValueError("backend must be 'inline' or 'jax'.")
+    recorder = None
+    if backend == "jax":
+        import csdl_alpha as csdl
+
+        recorder = csdl.get_current_recorder()
+        if recorder.inline:
+            raise ValueError("the JAX backend requires csdl.Recorder(inline=False).")
+        recorder.inline = True
     form_data = extract_dtmb_5415_form_data(reference)
     regions = dtmb_5415_longitudinal_regions(reference, form_data)
     if section_station_parameters is None:
@@ -720,7 +782,14 @@ def calibrate_dtmb_5415_form_hull(
     section_data = extract_dtmb_5415_section_fit_data(
         reference, section_station_parameters
     )
-    section_templates, sonar_dome_parameters = dtmb_5415_section_templates(section_data)
+    section_band_targets = dtmb_5415_section_band_fit_targets(section_data)
+    validation_data = extract_dtmb_5415_section_fit_data(
+        reference,
+        validation_station_parameters,
+        num_curve_points=section_data.curve_parameters.size,
+    )
+    if backend == "jax":
+        recorder.inline = False
     geometry = FormParameterHullProblem(
         form_data.primary_parameters,
         form_data.fit_targets,
@@ -730,8 +799,7 @@ def calibrate_dtmb_5415_form_hull(
         section_fit_parameters=section_data.curve_parameters,
         section_fit_points=section_data.points,
         section_fit_weight=section_fit_weight,
-        section_templates=section_templates,
-        sonar_dome_parameters=sonar_dome_parameters,
+        section_band_fit_targets=section_band_targets,
         form_fit_weight=form_fit_weight,
         x_origin=form_data.coordinate_origin,
         longitudinal_feature_parameters=(regions[0].end, regions[1].end),
@@ -750,35 +818,59 @@ def calibrate_dtmb_5415_form_hull(
         "lcb": form_data.primary_parameters.lcb,
         "waterplane_coefficient": (form_data.primary_parameters.waterplane_coefficient),
     }
-    primary_errors = {
-        name: float(
-            np.asarray(value.value).reshape(-1)[0] - float(primary_targets[name])
-        )
-        for name, value in recovered.items()
-    }
     fit_stations = form_data.fit_targets.station_parameters
     curve_targets = {
         "half_sectional_area": (
             geometry.sectional_area_curve,
             form_data.fit_targets.half_areas,
+            fit_stations,
         ),
         "waterline_half_breadth": (
             geometry.waterline_curve,
             form_data.fit_targets.half_breadths,
+            fit_stations,
         ),
-        "draft": (geometry.draft_curve, form_data.fit_targets.drafts),
-        "deadrise": (geometry.deadrise_curve, form_data.fit_targets.deadrise_angles),
-        "flare": (geometry.flare_curve, form_data.fit_targets.flare_angles),
+        "draft": (geometry.draft_curve, form_data.fit_targets.drafts, fit_stations),
+        "deadrise": (
+            geometry.deadrise_curve,
+            form_data.fit_targets.deadrise_angles,
+            fit_stations,
+        ),
+        "flare": (
+            geometry.flare_curve,
+            form_data.fit_targets.flare_angles,
+            fit_stations,
+        ),
+        "dome_top_height": (
+            geometry.section_band_curves["dome_top_height"],
+            -section_band_targets.dome_top_points[:, 0],
+            section_band_targets.station_parameters,
+        ),
+        "dome_top_half_breadth": (
+            geometry.section_band_curves["dome_top_half_breadth"],
+            section_band_targets.dome_top_points[:, 1],
+            section_band_targets.station_parameters,
+        ),
+        "hull_blend_height": (
+            geometry.section_band_curves["hull_blend_height"],
+            -section_band_targets.hull_blend_points[:, 0],
+            section_band_targets.station_parameters,
+        ),
+        "hull_blend_half_breadth": (
+            geometry.section_band_curves["hull_blend_half_breadth"],
+            section_band_targets.hull_blend_points[:, 1],
+            section_band_targets.station_parameters,
+        ),
     }
-    auxiliary_errors = {}
-    for name, (curve, targets) in curve_targets.items():
-        residual = np.asarray(curve.evaluate(fit_stations).value).reshape(-1) - targets
-        auxiliary_errors[name] = float(np.sqrt(np.mean(residual**2)))
+    curve_values = {
+        name: curve.evaluate(stations).reshape((len(stations),))
+        for name, (curve, _, stations) in curve_targets.items()
+    }
 
-    def section_errors(
+    def section_values(
         data: DTMB5415SectionFitData,
         surface: TensorProductSurface,
-    ) -> np.ndarray:
+    ) -> tuple:
         surface_points = []
         for station in data.station_parameters:
             parameters = np.column_stack(
@@ -787,18 +879,11 @@ def calibrate_dtmb_5415_form_hull(
                     np.full(data.curve_parameters.size, station),
                 )
             )
-            values = np.asarray(surface.evaluate(parameters).value)
-            surface_points.append(values[:, [2, 1]])
-        residual = np.asarray(surface_points) - data.points
-        return np.linalg.norm(residual, axis=2)
+            surface_points.append(surface.evaluate(parameters))
+        return tuple(surface_points)
 
-    fitting_distances = section_errors(section_data, geometry.hull.surface)
-    validation_data = extract_dtmb_5415_section_fit_data(
-        reference,
-        validation_station_parameters,
-        num_curve_points=section_data.curve_parameters.size,
-    )
-    validation_distances = section_errors(validation_data, geometry.hull.surface)
+    fitting_values = section_values(section_data, geometry.hull.surface)
+    validation_values = section_values(validation_data, geometry.hull.surface)
     baseline_sections = list(geometry.hull.sections)
     baseline_sections.insert(
         0, collapsed_section(baseline_sections[0], "dtmb_5415_baseline_bow")
@@ -816,11 +901,85 @@ def calibrate_dtmb_5415_form_hull(
         baseline_x,
         name="dtmb_5415_smooth_knot_baseline",
     )
-    single_patch_distances = section_errors(validation_data, baseline_surface)
+    baseline_values = section_values(validation_data, baseline_surface)
+
+    if backend == "jax":
+        import csdl_alpha as csdl
+        from csdl_alpha.experimental import JaxSimulator
+
+        trigger = csdl.Variable(value=0.0, name="dtmb_5415_jax_trigger")
+        output_variables = [
+            *recovered.values(),
+            *curve_values.values(),
+            *fitting_values,
+            *validation_values,
+            *baseline_values,
+            geometry.hull.surface.function.coefficients,
+            geometry.hull.variational_result.objective,
+            geometry.hull.variational_result.stationarity_residual,
+            geometry.hull.variational_result.constraint_residual,
+            geometry.hull.variational_result.lagrange_multipliers,
+            geometry.hull.hydrostatics.displacement,
+            geometry.hull.hydrostatics.center_of_buoyancy,
+            geometry.hull.hydrostatics.waterplane_area,
+            geometry.hull.hydrostatics.center_of_flotation,
+            geometry.hull.hydrostatics.transverse_waterplane_inertia,
+            geometry.hull.hydrostatics.longitudinal_waterplane_inertia,
+            geometry.hull.hydrostatics.wetted_area,
+        ]
+        output_variables.extend(
+            curve.coefficients
+            for curve in (
+                geometry.sectional_area_curve,
+                geometry.waterline_curve,
+                geometry.draft_curve,
+                geometry.deadrise_curve,
+                geometry.flare_curve,
+                *geometry.section_band_curves.values(),
+                *geometry.hull.sections,
+            )
+        )
+        unique_outputs = []
+        output_ids: set[int] = set()
+        for variable in output_variables:
+            if variable is not None and id(variable) not in output_ids:
+                unique_outputs.append(variable)
+                output_ids.add(id(variable))
+        simulator = JaxSimulator(
+            recorder,
+            additional_inputs=[trigger],
+            additional_outputs=unique_outputs,
+            gpu=False,
+            f64=True,
+        )
+        simulator.run()
+        recorder.inline = True
+
+    primary_errors = {
+        name: float(
+            np.asarray(value.value).reshape(-1)[0] - float(primary_targets[name])
+        )
+        for name, value in recovered.items()
+    }
+    auxiliary_errors = {}
+    for name, (_, targets, _) in curve_targets.items():
+        residual = np.asarray(curve_values[name].value).reshape(-1) - targets
+        auxiliary_errors[name] = float(np.sqrt(np.mean(residual**2)))
+
+    def distances(values: tuple, data: DTMB5415SectionFitData) -> np.ndarray:
+        points = np.stack(
+            [np.asarray(value.value, dtype=float)[:, [2, 1]] for value in values]
+        )
+        return np.linalg.norm(points - data.points, axis=2)
+
+    fitting_distances = distances(fitting_values, section_data)
+    validation_distances = distances(validation_values, validation_data)
+    single_patch_distances = distances(baseline_values, validation_data)
     return DTMB5415FormCalibration(
         geometry=geometry,
         form_data=form_data,
         section_fit_data=section_data,
+        section_band_fit_targets=section_band_targets,
         primary_parameter_errors=primary_errors,
         auxiliary_rms_errors=auxiliary_errors,
         fitting_section_rms_error=float(np.sqrt(np.mean(fitting_distances**2))),

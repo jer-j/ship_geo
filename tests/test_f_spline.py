@@ -4,6 +4,7 @@ import csdl_alpha as csdl
 import lsdo_function_spaces as lfs
 import numpy as np
 import pytest
+from csdl_alpha.experimental import JaxSimulator
 
 from lsdo_geo import FSplineCurve, FSplineProblem
 
@@ -102,3 +103,31 @@ def test_backend_derivative_limit_is_reported_before_evaluation():
     problem = FSplineProblem(num_control_points=8, degree=3)
     with pytest.raises(ValueError, match="current lsdo_b_splines_cython backend"):
         problem.add_derivative_constraint(0.5, 3, [0.0, 0.0])
+
+
+def test_jax_simulator_executes_implicit_fspline_solve():
+    recorder = csdl.Recorder(inline=False)
+    recorder.start()
+
+    target_area = csdl.Variable(value=15.0, name="jax_target_area")
+    problem = FSplineProblem(num_control_points=8, degree=3, name="jax_fspline")
+    problem.add_point_constraint(0.0, [0.0, 0.0])
+    problem.add_point_constraint(1.0, [4.0, 5.0])
+    problem.add_tangent_angle_constraint(0.0, np.deg2rad(80.0))
+    problem.add_tangent_angle_constraint(1.0, np.deg2rad(15.0))
+    problem.add_area_constraint(target_area, scale=0.1)
+    curve = problem.solve()
+    area = curve.signed_area()
+
+    simulator = JaxSimulator(
+        recorder,
+        additional_inputs=[target_area],
+        additional_outputs=[area, curve.coefficients, curve.constraint_residual],
+        gpu=False,
+        f64=True,
+    )
+    simulator.run()
+
+    np.testing.assert_allclose(area.value, [15.0], atol=2e-9)
+    assert np.max(np.abs(curve.constraint_residual.value)) < 2e-9
+    recorder.stop()

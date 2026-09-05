@@ -35,6 +35,7 @@ from .form_parameter_hull import (
     FormParameterHullProblem,
     LongitudinalFitTargets,
     NavalHullParameters,
+    SectionBandFitTargets,
 )
 from .hull import HullGeometry, SectionLoftAssembly, SectionLoftProblem
 from .hydrostatics import (
@@ -55,6 +56,7 @@ from .mesh import (
 from .refinement import fit_offset_surface, refine_curve, refine_surface
 from .sections import (
     SectionAssembly,
+    SectionBandParameters,
     SectionProblem,
     SectionTemplate,
     SonarDomeSectionParameters,
@@ -98,6 +100,8 @@ __all__ = [
     "PatchGraph",
     "RegionalCompatibleLoft",
     "SectionAssembly",
+    "SectionBandFitTargets",
+    "SectionBandParameters",
     "SectionControlValues",
     "SectionLoftAssembly",
     "SectionLoftProblem",

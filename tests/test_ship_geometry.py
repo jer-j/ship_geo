@@ -16,6 +16,8 @@ from lsdo_geo import (
     LongitudinalLoftRegion,
     NavalHullParameters,
     RegionalCompatibleLoft,
+    SectionBandFitTargets,
+    SectionBandParameters,
     SectionLoftProblem,
     SectionProblem,
     SectionTemplate,
@@ -463,6 +465,124 @@ def test_sonar_dome_section_preserves_component_variables_and_derivative():
     breadth_derivative = csdl.derivative(curve.evaluate(0.30)[1], dome_breadth)
     np.testing.assert_allclose(breadth_derivative.value, [[1.0]], atol=2e-9)
     assert np.max(np.abs(curve.constraint_residual.value)) < 2e-10
+    recorder.stop()
+
+
+def test_blended_sonar_dome_uses_continuous_bands_and_guide_variables():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+
+    dome_top_breadth = csdl.Variable(value=0.4, name="dome_top_breadth")
+    bands = SectionBandParameters(
+        dome_top_parameter=0.4,
+        dome_top_point=csdl.concatenate(
+            (
+                csdl.Variable(value=-0.6).reshape((1,)),
+                dome_top_breadth.reshape((1,)),
+            )
+        ),
+        hull_blend_parameter=0.75,
+        hull_blend_point=np.array([-0.25, 0.75]),
+        continuity=1,
+    )
+    system = VariationalSystem("blended_sonar_dome")
+    problem = SectionProblem(
+        station_parameter=0.1,
+        draft=1.0,
+        half_breadth=1.0,
+        half_area=0.5,
+        keel_tangent_angle=np.pi / 4.0,
+        waterline_tangent_angle=np.pi / 4.0,
+        template=SectionTemplate.BLENDED_SONAR_DOME,
+        section_band_parameters=bands,
+        num_control_points=10,
+        fairness_weights={2: 1.0e-4},
+    )
+    curve = problem.assemble(system).finalize(system.solve(max_iter=30))
+
+    np.testing.assert_allclose(curve.evaluate(0.4).value, [-0.6, 0.4], atol=2e-10)
+    np.testing.assert_allclose(curve.evaluate(0.75).value, [-0.25, 0.75], atol=2e-10)
+    np.testing.assert_allclose(curve.signed_area().value, [0.5], atol=2e-10)
+    derivative = csdl.derivative(curve.evaluate(0.4)[1], dome_top_breadth)
+    np.testing.assert_allclose(derivative.value, [[1.0]], atol=2e-8)
+    knots = np.asarray(curve.space.knots[curve.space.knot_indices[0]])
+    assert np.count_nonzero(np.isclose(knots, 0.4)) == 2
+    assert np.count_nonzero(np.isclose(knots, 0.75)) == 2
+    assert np.max(np.abs(curve.constraint_residual.value)) < 2e-9
+    recorder.stop()
+
+
+def test_section_band_knots_support_curvature_continuity():
+    bands = SectionBandParameters(
+        dome_top_parameter=0.4,
+        dome_top_point=[-0.6, 0.4],
+        hull_blend_parameter=0.75,
+        hull_blend_point=[-0.25, 0.75],
+        continuity=2,
+    )
+    knots = bands.knots(num_control_points=8, degree=3)
+
+    assert np.count_nonzero(np.isclose(knots, 0.4)) == 1
+    assert np.count_nonzero(np.isclose(knots, 0.75)) == 1
+
+
+def test_form_parameter_hull_assembles_fair_section_guides_in_one_solve():
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+
+    stations = np.array([0.25, 0.5, 1.0])
+    primary = NavalHullParameters(
+        length_between_perpendiculars=10.0,
+        beam=4.0,
+        draft=2.0,
+        displacement=50.0,
+        lcb=0.0,
+        waterplane_coefficient=0.7,
+    )
+    targets = LongitudinalFitTargets(
+        station_parameters=stations,
+        half_breadths=[1.5, 2.0, 1.0],
+        half_areas=[2.0, 3.0, 1.0],
+        drafts=[2.0, 2.0, 1.5],
+        deadrise_angles=[0.3, 0.2, 0.1],
+        flare_angles=[0.0, 0.0, 0.1],
+        maximum_beam_parameter=0.5,
+        maximum_draft_parameter=0.5,
+    )
+    band_targets = SectionBandFitTargets(
+        station_parameters=stations,
+        dome_top_points=[[-1.2, 0.5], [-1.2, 0.7], [-0.9, 0.4]],
+        hull_blend_points=[[-0.5, 1.2], [-0.5, 1.6], [-0.4, 0.8]],
+        dome_top_parameter=0.4,
+        hull_blend_parameter=0.75,
+        continuity=1,
+    )
+    geometry = FormParameterHullProblem(
+        primary,
+        targets,
+        num_form_control_points=6,
+        num_section_control_points=10,
+        section_band_fit_targets=band_targets,
+        name="guided_naval_parameter_test",
+    ).solve(max_iter=40)
+
+    assert len(geometry.section_band_curves) == 4
+    assert len(geometry.hull.variational_result.stationarity_residuals) == 12
+    reference_knots = np.asarray(
+        geometry.hull.sections[0].space.knots[
+            geometry.hull.sections[0].space.knot_indices[0]
+        ]
+    )
+    assert np.count_nonzero(np.isclose(reference_knots, 0.4)) == 2
+    assert np.count_nonzero(np.isclose(reference_knots, 0.75)) == 2
+    for section in geometry.hull.sections[1:]:
+        np.testing.assert_allclose(
+            section.space.knots[section.space.knot_indices[0]], reference_knots
+        )
+    assert (
+        np.max(np.abs(geometry.hull.variational_result.constraint_residual.value))
+        < 2e-9
+    )
     recorder.stop()
 
 

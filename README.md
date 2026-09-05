@@ -52,6 +52,10 @@ cd ship_geo
 python -m pip install -e ".[test]"
 ```
 
+The test extra installs the CPU JAX backend used by the full DTMB 5415
+calibration. The inline CSDL simulator remains available for small analytic
+examples and debugging.
+
 The implementation reuses `lsdo_function_spaces.BSplineSpace` and its
 `lsdo_b_splines_cython` basis backend. It does not duplicate basis evaluation
 or use SciPy in the ship-specific F-Spline layer. Curve operations, form

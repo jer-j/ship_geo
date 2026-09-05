@@ -39,6 +39,13 @@ def _value_array(value: Any) -> np.ndarray:
     return np.asarray(value, dtype=float)
 
 
+def _target_size(value: Any) -> int:
+    """Return graph shape size without requiring a computed inline value."""
+    if isinstance(value, csdl.Variable):
+        return int(value.size)
+    return int(np.asarray(value).size)
+
+
 def _coerce_target(value: Any) -> Any:
     """Convert ordinary array-like targets while preserving CSDL variables."""
     if isinstance(value, csdl.Variable):
@@ -368,7 +375,7 @@ class FSplineProblem:
     def add_centroid_constraint(self, target: Any, scale: float = 1.0) -> None:
         """Add a planar area-centroid constraint."""
         self._require_planar("centroid")
-        if _value_array(target).size != 2:
+        if _target_size(target) != 2:
             raise ValueError("centroid target must contain two values.")
         self.constraints.append(CentroidConstraint(_coerce_target(target), scale))
 
@@ -540,7 +547,7 @@ class FSplineProblem:
             raise ValueError("constraint parameter must lie in [0, 1].")
 
     def _validate_vector_target(self, target: Any) -> None:
-        size = int(_value_array(target).size)
+        size = _target_size(target)
         if size != self.physical_dimension:
             raise ValueError(
                 f"constraint target must contain {self.physical_dimension} values, "

@@ -43,6 +43,8 @@ from .core.ship_geometry import (
     PatchGraph,
     RegionalCompatibleLoft,
     SectionAssembly,
+    SectionBandFitTargets,
+    SectionBandParameters,
     SectionControlValues,
     SectionLoftAssembly,
     SectionLoftProblem,

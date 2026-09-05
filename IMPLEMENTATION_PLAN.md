@@ -129,9 +129,9 @@ export remain deferred.
 
 Status: primary form-parameter hierarchy, auxiliary-function fitting,
 surface-level DTMB 5415 calibration, and independent-station validation are
-implemented. The primary variables remain exact to $9.85\times10^{-16}$; the
-controlled single-patch surface reaches $15.29\ \mathrm{mm}$ RMS on independent
-sections and establishes the baseline for component-wise refinement.
+implemented. The primary variables remain exact to $2.85\times10^{-16}$; the
+controlled single-patch surface reaches $14.315\ \mathrm{mm}$ RMS on independent
+sections and establishes the baseline for local bow refinement.
 
 - Expose $L_{PP}$, $B$, $T$, $\nabla$, $x_{LCB}$, and $C_{WP}$ as primary
   CSDL inputs constrained exactly on the curves of form.
@@ -147,8 +147,10 @@ sections and establishes the baseline for component-wise refinement.
 
 Status: the regional loft remains available as a diagnostic, but the primary
 architecture now follows the surface-combatant curve network and produces one
-tensor-product surface. The canonical transition locations become repeated
-internal knots with $C^1$ continuity. The implemented network exposes CPC,
+tensor-product surface. Two fair longitudinal boundary curves partition every
+section into a lower sonar-dome band, a hull-dome transition band, and an upper
+hull band. Their transverse locations become repeated internal knots with
+$C^1$ continuity. The implemented network exposes CPC,
 DWL, sectional area, keel and waterline tangents, entrance slope, and sectional
 fullness, with DECK, FOB, ASC, and local feature curves as named extensions.
 The sonar section template exposes dome depth, breadth, maximum-breadth height,
@@ -167,11 +169,14 @@ attachment height and breadth, and local tangency as CSDL-connected variables.
 - Add a sonar-dome section topology whose public variables distinguish dome
   depth, dome breadth, maximum-breadth height, attachment height, and local
   tangency from ordinary round-bilge deadrise and flare.
-- Fit fair longitudinal sonar-depth, dome-breadth, maximum-breadth-height,
-  attachment-height, and attachment-breadth curves. The current two-station
-  hard-constraint experiment reduces overall single-patch holdout RMS from
-  $16.16$ to $15.06\ \mathrm{mm}$ but increases the local maximum to
-  $60.61\ \mathrm{mm}$, showing why those variables must evolve as curves.
+- Fit fair longitudinal height and half-breadth functions for both section-band
+  boundaries. This reduces holdout RMS from $15.547$ to
+  $14.315\ \mathrm{mm}$ and reduces fitting maximum error from $49.546$ to
+  $43.306\ \mathrm{mm}$. The remaining $55.499\ \mathrm{mm}$ holdout maximum
+  is localized near the bow transition and motivates interface-parameter fitting
+  plus local longitudinal knot refinement.
+- Execute the fixed-topology calibration with the CSDL JAX simulator while
+  retaining a single global implicit Newton solve.
 
 ## Verification policy
 

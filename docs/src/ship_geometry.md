@@ -146,6 +146,21 @@ continuity while retaining a single control net. The remaining interpolation
 knots are selected from parameter-averaged candidates by a rank and condition
 check, which prevents a nominally valid but singular section interpolation.
 
+The transverse section space uses the same idea for the sonar dome. Two fair
+longitudinal guide curves define the dome top and the top of the transition
+band. Their evaluations become exact point constraints on every compatible
+section. Repeated cubic transverse knots at those two section parameters divide
+the section into lower-hull/sonar, transition, and upper-hull bands with $C^1$
+continuity. The sections still share one degree and knot vector, so skinning
+them produces one tensor-product surface rather than three patched surfaces.
+
+The DTMB 5415 validation can execute this complete fixed-topology graph with
+`csdl_alpha.experimental.JaxSimulator`. JAX compiles the single implicit Newton
+solve and all requested validation outputs in 64-bit mode. The first compile is
+substantial because the current calibration graph contains roughly eighty
+thousand operations; subsequent execution of that compiled simulator is the
+intended path for repeated evaluations.
+
 ## Naval form-parameter hierarchy
 
 `FormParameterHullProblem` implements the MIT-style separation between primary
@@ -248,11 +263,13 @@ refinement. Structured CSDL meshes preserve derivatives at their vertices;
 their current numerical state can be seam-welded for watertightness checks and
 exported to STL or OBJ as a terminal, non-differentiable operation.
 
-The first published validation hull is DTMB 5415. Its sonar dome is represented
-as a separate connected region and receives its own approximation-error and
-refinement report, rather than being smoothed into the main forebody. The fine
-model reaches a global RMS surface error of $0.350\ \mathrm{mm}$ and a sonar
-dome RMS error of $0.233\ \mathrm{mm}$ on the $6.119\ \mathrm{m}$ reference
-model.
+The first published validation hull is DTMB 5415. The direct IGES approximation
+study retains its three source patches so the sonar dome and transition receive
+separate error reports. The first-principles generator instead encodes those
+features as $C^1$ transverse bands inside one compatible surface. The fine
+direct approximation reaches a global RMS surface error of
+$0.350\ \mathrm{mm}$ and a sonar-dome RMS error of $0.233\ \mathrm{mm}$ on the
+$6.119\ \mathrm{m}$ reference model; the naval-variable one-surface calibration
+currently reaches $14.315\ \mathrm{mm}$ RMS on independent sections.
 
 ![One-solve F-Spline hull](images/first_principles_fspline_hull.png)

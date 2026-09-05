@@ -11,6 +11,7 @@ from lsdo_geo.validation import (
     DTMB5415Region,
     DTMB5415SectionFitData,
     PolynomialIGESPatch,
+    dtmb_5415_section_band_fit_targets,
     dtmb_5415_section_templates,
     extract_dtmb_5415_form_data,
     fit_dtmb_5415,
@@ -235,3 +236,33 @@ def test_dtmb_section_templates_extract_dome_lobe_and_attachment():
     assert dome.maximum_half_breadth == 0.12
     assert dome.attachment_parameter == parameters[5]
     assert dome.attachment_half_breadth == 0.02
+
+
+def test_dtmb_section_band_targets_span_every_section():
+    parameters = np.linspace(0.0, 1.0, 9)
+    points = np.stack(
+        (
+            np.column_stack((-0.4 + 0.4 * parameters, 0.2 * parameters)),
+            np.column_stack((-0.3 + 0.3 * parameters, 0.4 * parameters)),
+            np.column_stack((-0.2 + 0.2 * parameters, 0.3 * parameters)),
+        )
+    )
+    data = DTMB5415SectionFitData(
+        station_parameters=np.array([0.05, 0.5, 1.0]),
+        curve_parameters=parameters,
+        points=points,
+        longitudinal_coordinates=np.array([-2.5, 0.0, 2.5]),
+        station_regions=(
+            DTMB5415Region.SONAR_DOME,
+            DTMB5415Region.MAIN_HULL,
+            DTMB5415Region.MAIN_HULL,
+        ),
+    )
+
+    targets = dtmb_5415_section_band_fit_targets(
+        data, dome_top_parameter=0.625, hull_blend_parameter=0.875
+    )
+
+    np.testing.assert_allclose(targets.dome_top_points, points[:, 5, :])
+    np.testing.assert_allclose(targets.hull_blend_points, points[:, 7, :])
+    assert targets.continuity == 1
