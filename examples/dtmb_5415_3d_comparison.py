@@ -117,18 +117,35 @@ def main() -> None:
     def x_of(v: float) -> float:
         return origin - 0.5 * length + length * float(v)
 
+    def _longitudinal_first(mesh: np.ndarray) -> np.ndarray:
+        """Put the longitudinal direction on axis 0.
+
+        The cached meshes run the girth along axis 0 and stations along axis
+        1, so masking rows by x kept every row and the close-ups silently
+        drew the whole hull.
+        """
+        if mesh is None:
+            return None
+        return np.transpose(mesh, (1, 0, 2))
+
     cache = np.load(arguments.cache)
-    underwater = cache["underwater_mesh"]
-    freeboard = cache["freeboard_mesh"]
+    underwater = _longitudinal_first(cache["underwater_mesh"])
+    freeboard = _longitudinal_first(cache["freeboard_mesh"])
     # The sonar-dome band is a partial-length patch below the blend line and
     # is only present once the hull is built with a separate dome section.
-    dome = cache["dome_mesh"] if "dome_mesh" in cache.files else None
+    dome = (
+        _longitudinal_first(cache["dome_mesh"])
+        if "dome_mesh" in cache.files
+        else None
+    )
     if dome is not None:
         print(f"sonar-dome patch: {dome.shape[0]}x{dome.shape[1]} samples, "
               f"x {dome[:, :, 0].min():.4f} .. {dome[:, :, 0].max():.4f}")
     # The accurate run caches the three-region loft separately; prefer it.
     patch_keys = sorted(key for key in cache.files if key.startswith("patch_"))
-    regional_patches = [(key[len("patch_"):], cache[key]) for key in patch_keys]
+    regional_patches = [
+        (key[len("patch_"):], _longitudinal_first(cache[key])) for key in patch_keys
+    ]
     if regional_patches:
         print("regional patches:", ", ".join(name for name, _ in regional_patches))
 

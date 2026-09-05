@@ -416,13 +416,64 @@ def main() -> None:
         max_primary = max(max_primary, abs(error))
     print(f"max primary-parameter residual = {max_primary:.3e}")
 
+    # ``evaluate_section`` samples the main hull surface. Where a sonar-dome
+    # band is carried that surface begins at the blend line, so comparing it
+    # against a reference running down to the keel measures the band that is
+    # missing from the comparison rather than any error in the geometry -- it
+    # reads 147 mm at v = 0.03 where the assembled section is within 4.2 mm.
+    # Score against both surfaces, by nearest point so that no shared
+    # parameterization between the reference and the two bands is assumed.
+    def _assembled_section(x_target: float) -> np.ndarray | None:
+        pieces = []
+        for key in ("underwater_mesh", "dome_mesh"):
+            if key not in values:
+                continue
+            # Axis 1 of these meshes runs longitudinally; axis 0 runs the girth.
+            mesh = np.transpose(values[key], (1, 0, 2))
+            stations = mesh[:, :, 0].mean(axis=1)
+            order = np.argsort(stations)
+            stations, mesh = stations[order], mesh[order]
+            if x_target < stations[0] - 0.02 or x_target > stations[-1] + 0.02:
+                continue
+            upper = int(np.clip(np.searchsorted(stations, x_target), 1, len(stations) - 1))
+            span = stations[upper] - stations[upper - 1]
+            blend = 0.0 if span <= 0.0 else (x_target - stations[upper - 1]) / span
+            row = (1.0 - blend) * mesh[upper - 1] + blend * mesh[upper]
+            pieces.append(np.stack([row[:, 2], row[:, 1]], axis=1))
+        if not pieces:
+            return None
+        section = np.concatenate(pieces)
+        section = section[np.argsort(section[:, 0])]
+        steps = np.linalg.norm(np.diff(section, axis=0), axis=1)
+        arc = np.concatenate(([0.0], np.cumsum(steps)))
+        if arc[-1] <= 0.0:
+            return section
+        dense = np.linspace(0.0, arc[-1], 2000)
+        return np.stack(
+            [np.interp(dense, arc, section[:, 0]), np.interp(dense, arc, section[:, 1])],
+            axis=1,
+        )
+
+    origin = float(form_data.coordinate_origin)
+    span_length = float(form_data.primary_parameters.length_between_perpendiculars)
+
     payload: dict[str, np.ndarray] = {}
     section_errors: dict[str, np.ndarray] = {}
     for label, data in (("fit", section_data), ("holdout", holdout_data)):
         distances = []
         for index in range(data.station_parameters.size):
-            generated = values[f"{label}_section_{index}"][:, [2, 1]]
-            distances.append(np.linalg.norm(generated - data.points[index], axis=1))
+            station = float(data.station_parameters[index])
+            assembled = _assembled_section(origin - 0.5 * span_length + span_length * station)
+            reference = data.points[index]
+            if assembled is None:
+                generated = values[f"{label}_section_{index}"][:, [2, 1]]
+                distances.append(np.linalg.norm(generated - reference, axis=1))
+                continue
+            distances.append(
+                np.linalg.norm(
+                    reference[:, None, :] - assembled[None, :, :], axis=2
+                ).min(axis=1)
+            )
         stacked = np.asarray(distances)
         section_errors[label] = stacked
         rms = float(np.sqrt(np.mean(stacked**2)))
