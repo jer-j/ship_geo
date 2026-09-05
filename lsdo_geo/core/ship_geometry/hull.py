@@ -183,6 +183,7 @@ class SectionLoftProblem:
         ),
         surface_num_longitudinal_control_points: int | None = None,
         surface_fairness_weights: dict[tuple[int, int], float] | None = None,
+        surface_quadrature_order: tuple[int, int] = (6, 6),
         surface_constraint_scale: float = 1.0,
         pointed_ends: bool | tuple[bool, bool] = True,
         x_origin: Any = 0.0,
@@ -316,6 +317,12 @@ class SectionLoftProblem:
             else int(surface_num_longitudinal_control_points)
         )
         self.surface_fairness_weights = surface_fairness_weights
+        # The fairness terms integrate squared second derivatives. For a cubic
+        # those are linear, so their products are quadratic and a three-point
+        # rule is exact; the default six-point rule costs four times as many
+        # surface evaluations for no accuracy, and each evaluation is what
+        # makes the thin-plate objective expensive to compile.
+        self.surface_quadrature_order = tuple(surface_quadrature_order)
         self.surface_constraint_scale = float(surface_constraint_scale)
         self.pointed_ends = (pointed_bow, pointed_stern)
         self.x_origin = x_origin
@@ -511,6 +518,7 @@ class SectionLoftProblem:
                 station_parameters=loft_parameters,
                 x_coordinates=x_coordinates,
                 longitudinal_degree=self.longitudinal_degree,
+                quadrature_order=self.surface_quadrature_order,
                 name=f"{self.name}_surface",
             )
             if self.longitudinal_fairness_weight or self.surface_fairness_weights:

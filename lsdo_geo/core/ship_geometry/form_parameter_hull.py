@@ -1023,6 +1023,7 @@ class FormParameterHullProblem:
             dome_fit_points=dome_fit_points,
             dome_mask=dome_mask,
             longitudinal_fairness_weight=self.surface_fairness_weight,
+            surface_quadrature_order=(3, 3) if self.surface_fairness_weight else (6, 6),
             unify_bands=self.unify_bands,
             waterline_parameters=self.section_waterline_parameters,
             blend_parameters=blend_parameters,
