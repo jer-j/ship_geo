@@ -7,10 +7,12 @@ points are obtained by minimizing a fairness functional subject to geometric
 form constraints.
 
 The package uses `csdl_alpha` to express the Karush-Kuhn-Tucker residual and
-solve it with the CSDL Newton solver. This keeps the generated curve inside the
-same computational graph used by a multidisciplinary design optimization.
+solve it with the CSDL Newton solver. Curves of form, compatible transverse
+sections, and coupled surface-fairness terms can be assembled into one global
+solve and remain in the same computational graph used by a multidisciplinary
+design optimization.
 
-## Current milestone
+## Implemented geometry
 
 - Open, non-rational B-spline curves.
 - First- and second-derivative fairness measures supported by the current
@@ -18,10 +20,28 @@ same computational graph used by a multidisciplinary design optimization.
 - Point, derivative, tangent-angle, curvature, area, and centroid constraints.
 - Newton solution of the complete F-Spline KKT system.
 - Analytic implicit derivatives through the CSDL graph.
-- A ship-section demonstration and numerical verification tests.
+- Scalar longitudinal curves of form with value, derivative, integral, and
+  moment constraints.
+- Round-bilge and hard-chine compatible section templates.
+- One-solve section-family assembly and tensor-product surface lofting.
+- Free F-Surface control nets with thin-plate fairness, geometric constraints,
+  and multi-patch continuity in the same global Newton solve.
+- Optional section-to-F-Surface incidence constraints that couple the complete
+  first-principles hull, including every section and the surface control net,
+  in that one solve.
+- Pointed boundaries, exact waterplane/transom caps, and a surface
+  patch-connectivity graph.
+- General oriented multi-patch hydrostatics, including displacement, centers,
+  waterplane properties, sectional areas, and wetted area.
+- Sampled CSDL validity fields, closure and watertightness diagnostics, exact
+  knot refinement, residual indicators, and offset-table fitting.
+- Differentiable structured meshes with terminal STL and OBJ export.
+- Analytic box, prism, and Wigley verification.
+- Regional DTMB 5415 convergence validation that explicitly retains and
+  reports the sonar dome and dome-to-hull transition.
 
-NURBS, hull surface generation, and relational feasibility rules are outside
-the first milestone. The planned development sequence is documented in
+NURBS and McCulloch-style relational feasibility contraction remain outside
+the current scope. The development sequence is documented in
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
 
 ## Installation
@@ -31,6 +51,10 @@ git clone https://github.com/jer-j/ship_geo.git
 cd ship_geo
 python -m pip install -e ".[test]"
 ```
+
+The test extra installs the CPU JAX backend used by the full DTMB 5415
+calibration. The inline CSDL simulator remains available for small analytic
+examples and debugging.
 
 The implementation reuses `lsdo_function_spaces.BSplineSpace` and its
 `lsdo_b_splines_cython` basis backend. It does not duplicate basis evaluation
@@ -72,10 +96,14 @@ Run the complete demonstration with:
 
 ```bash
 python examples/f_spline_ship_section.py
+python examples/first_principles_fspline_hull.py
+python examples/f_surface_global_solve.py
+python examples/dtmb_5415_validation.py
 ```
 
-The script writes `f_spline_ship_section.png` and prints the KKT and geometric
-constraint residuals.
+The scripts write section-family, coupled-surface, complete-hull, and DTMB 5415
+validation figures and print KKT, hydrostatic, derivative, validity, and
+regional approximation diagnostics.
 
 ## Attribution
 

@@ -50,7 +50,11 @@ nb_execution_mode = 'off'
 # autodoc_typehints = 'description'
 
 # autoapi options
-autoapi_dirs = ["../lsdo_geo/core/splines"]
+autoapi_dirs = [
+    "../lsdo_geo/core/splines",
+    "../lsdo_geo/core/ship_geometry",
+    "../lsdo_geo/validation",
+]
 autoapi_root = 'src/autoapi'
 autoapi_type = 'python'
 autoapi_file_patterns = ['*.py', '*.pyi']
@@ -59,6 +63,7 @@ autoapi_options = [ 'members', 'undoc-members', 'private-members', 'show-inherit
 autoapi_add_toctree_entry = False
 autoapi_member_order = 'groupwise'
 autoapi_python_class_content = 'class' # 'both' or '__init'
+suppress_warnings = ["autoapi.python_import_resolution"]
 
 root_doc = 'index'
 

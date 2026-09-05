@@ -35,8 +35,27 @@ class TangentAngleConstraint:
 
 
 @dataclass(frozen=True)
+class TangentDirectionConstraint:
+    """Constrain tangent direction in an arbitrary physical dimension."""
+
+    parameter: float
+    direction: Any
+    pivot_index: int
+    scale: float = 1.0
+
+
+@dataclass(frozen=True)
 class CurvatureConstraint:
     """Constrain signed planar curvature."""
+
+    parameter: float
+    target: Any
+    scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class CurvatureMagnitudeConstraint:
+    """Constrain unsigned curvature in any physical dimension."""
 
     parameter: float
     target: Any
@@ -63,7 +82,9 @@ FSplineConstraint = (
     PointConstraint
     | DerivativeConstraint
     | TangentAngleConstraint
+    | TangentDirectionConstraint
     | CurvatureConstraint
+    | CurvatureMagnitudeConstraint
     | AreaConstraint
     | CentroidConstraint
 )
