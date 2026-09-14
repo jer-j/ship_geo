@@ -29,16 +29,17 @@ There is no SciPy solve or JAX custom callback in this operation.
 \]
 
 The profiles have zero two-jets at the retained-hull attachment. Projection
-is measured forward of the chosen longitudinal origin; the drop is measured
-downward from the supplied geometry. Preserve the centerplane boundary and
+and drop are displacements from the supplied geometry, respectively forward
+and downward where the profile product is one. Preserve the centerplane boundary and
 verify surface regularity when selecting amplitudes.
 
-Two focused tests check boundary replacement, unchanged support, nose
-coordinates and the CSDL projection derivative. These operators are prepared
-for integration into the existing form-parameter hull assembly; this PR does
-not claim an end-to-end calibrated DTMB reconstruction or a rerun of the
-repository's Python 3.10 validation suite. The focused tests ran with Python
-3.12 and the CSDL revision used by the separately distributed prototype.
+Focused tests check boundary replacement, unchanged support, nose coordinates
+and the CSDL projection derivative. The whole-deck extension also tests a
+shared breadth/sheer solve, implicit derivatives, C2 knots, and compatible
+deck/stem composition. All five focused tests now pass on Python 3.10 with
+the repository-pinned dependencies. See [whole weather deck](whole_weather_deck.md)
+for the native reference fit. Full hull assembly remains a separate step;
+these operators do not establish an end-to-end calibrated reconstruction.
 
 The reference is the existing checksum-pinned DTMB 5415 IGES in
 `lsdo_geo/validation/dtmb_5415.py`. A side edge can be smooth while the closed
